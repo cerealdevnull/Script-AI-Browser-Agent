@@ -125,6 +125,7 @@ tasks.withType<Test>().configureEach {
 
 tasks.test {
     useJUnitPlatform { excludeTags("scriptJar", "acceptance") }
+    systemProperty("aiagent.headless", findProperty("headless") ?: "false")
 }
 
 // Opt-in acceptance runs on a real claude-opus-5-5 and Toolshop (docs/acceptance.md). They cost money and skip

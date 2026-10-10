@@ -105,6 +105,23 @@ class RepeatTest {
     }
 
     @Test
+    fun `a Chrome that was closed or crashed is started again at the next iteration`() {
+        stock("Out of stock")
+        val model = learning()
+
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            val chrome = ProcessHandle.allProcesses().toList().filter { "--user-data-dir=$profiles" in it.info().commandLine().orElse("") }
+            assertTrue(chrome.isNotEmpty())
+            chrome.forEach { it.destroyForcibly() }
+            chrome.forEach { it.onExit().get() }
+
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(2, model.requests.size, "the relaunched Chrome replays")
+        }
+    }
+
+    @Test
     fun `a Check that disagrees with goal_met is rejected twice, then the run reports but caches nothing`() {
         stock("Out of stock")
         // "Out of stock" contains "Out of stock": true on the page, while the model says not met.

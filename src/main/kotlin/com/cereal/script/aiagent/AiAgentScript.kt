@@ -49,8 +49,13 @@ class AiAgentScript(
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
         val browser =
-            browser ?: try {
-                Browser.launch(profilesDir.resolve(profileName(configuration)), pageLoadTimeoutMs).also { browser = it }
+            browser?.takeIf { it.alive } ?: try {
+                this.browser?.let { dead ->
+                    log.warn("Chrome was closed or crashed: starting it again")
+                    this.browser = null
+                    dead.close()
+                }
+                Browser.launch(profilesDir.resolve(profileName(configuration)), pageLoadTimeoutMs).also { this.browser = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -86,7 +91,7 @@ class AiAgentScript(
                 replayed = cache != null
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
-                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat) { m -> log.info(scrubber.forLog(m)) }
+                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check) { m -> log.info(scrubber.forLog(m)) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -125,7 +130,7 @@ class AiAgentScript(
             // A monitor stays quiet until the goal is met.
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
-                val readouts = outcome.readouts.joinToString("") { "${it.label}: ${it.text}\n" }
+                val readouts = outcome.readouts.joinToString("") { scrubber.forLog("${it.label}: ${it.text}\n") }
                 val summary = if (repeat || outcome.summary.isEmpty()) "" else scrubber.forLog(outcome.summary).take(300) + "\n"
                 notify(configuration, provider, "$verdict\n$readouts$summary".removeSuffix("\n") + cost())
                 // A Once run that answers "not met" still completed its job.
@@ -142,11 +147,12 @@ class AiAgentScript(
     }
 
     /**
-     * Stores what a finished learned run can replay. Not when the Check or Readouts failed validation; a run that found
-     * the goal already met keeps no Check (it can't show the Check tells met from not met); a Once run needs a Check or a Readout.
+     * Stores what a finished learned or healed run can replay. Not when the Check or Readouts failed validation; a run
+     * that found the goal already met can't show its Check tells met from not met, so it keeps the [cached] Check (a
+     * heal's) or none (a learned run's); a Once run needs a Check or a Readout.
      */
-    private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, log: (String) -> Unit) {
-        val check = run.check.takeUnless { run.goalMet }
+    private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, cached: Check?, log: (String) -> Unit) {
+        val check = if (run.goalMet) cached else run.check
         val skipped =
             when {
                 !run.verified -> "the Check or Readouts failed validation"
@@ -225,11 +231,12 @@ class AiAgentScript(
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
 
-    // ponytail: the SDK gives scripts no task id, so the profile is keyed by goal + start URL. Two tasks with the
-    // same goal and URL share a profile (and can't run at the same time); key by task id if the SDK ever offers one.
+    // ponytail: the SDK gives scripts no task id, so the profile is keyed by goal + start URL + secret slots (names
+    // and values, hashed: another account gets its own cookies). Two tasks with the same goal, URL and secrets share a
+    // profile (and can't run at the same time); key by task id if the SDK ever offers one.
     private fun profileName(config: AgentConfiguration): String =
         MessageDigest.getInstance("SHA-256")
-            .digest("${config.goal()}\n${config.startUrl().trim()}".toByteArray())
+            .digest("${config.goal()}\n${config.startUrl().trim()}\n${config.secrets().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }}".toByteArray())
             .joinToString("") { "%02x".format(it) }
             .take(16)
 }

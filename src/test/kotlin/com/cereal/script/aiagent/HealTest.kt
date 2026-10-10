@@ -1,6 +1,7 @@
 package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
+import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -10,6 +11,7 @@ import java.security.MessageDigest
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -190,6 +192,76 @@ class HealTest {
 
         assertEquals("Goal met\nPrice: Price: \$15.00\nFound it.\nreplayed + healed in 1 step, \$0.01", host.notifications.last().message)
         assertTrue(host.logs.any { "replay miss: readout 'Price' does not match exactly one node" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `an unexpected page error during replay heals instead of ending the monitor`() {
+        val original = site.pages.getValue("product.html")
+        val model =
+            learning(
+                {
+                    site.pages["product.html"] = original
+                    listOf(call("navigate", """{"url": "${site.url("product.html")}"}"""))
+                },
+                notMet,
+            )
+
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            // Breaks the script's in-page lookups: evaluating the Check throws.
+            site.pages["product.html"] = original.replace("<body>", "<body><script>Element.prototype.querySelectorAll = () => { throw new Error('boom') }</script>")
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(5, model.requests.size)
+        }
+        assertTrue(host.logs.any { "replay miss: the check" in it && "boom" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `another kind of element where the learned target was is a miss, not a guess`() {
+        site.pages["index.html"] = """<html><body><form><input aria-label="Email address"></form><p>Status:</p><p>Out</p></body></html>"""
+        val out: suspend (ModelRequest) -> List<ToolCall> = {
+            val check = """{"ref": "${it.textRef("StaticText", "Out")}", "condition": "textContains", "expected": "In"}"""
+            listOf(call("finish", """{"goal_met": false, "summary": "Out.", "readouts": null, "check": $check}"""))
+        }
+        val model =
+            ScriptedModel(
+                { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
+                out,
+                {
+                    assertFalse("value=" in it.lastText, "the secret was typed into another element:\n${it.lastText}")
+                    out(it)
+                },
+            )
+        val config = TestConfig(goal = GOAL, startUrl = site.url(""), runMode = RunMode.Repeat, repeatInterval = 7, secrets = listOf("email" to Secret("me@example.com")))
+
+        task(model, config) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            // Same xpath, but a search box instead of the email field.
+            site.pages["index.html"] = """<html><body><form><input type="search" aria-label="Search"></form><p>Status:</p><p>Out</p></body></html>"""
+            assertIs<ExecutionResult.Loop>(execute())
+        }
+        assertEquals(3, model.requests.size)
+        assertTrue(host.logs.any { "replay miss: step 1 of 1 (type_secret): no unique match" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `a heal that finds the goal met keeps the learned Check, so the next run still replays`() {
+        val met: suspend (ModelRequest) -> List<ToolCall> = {
+            val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "textContains", "expected": "In stock"}"""
+            listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": null, "check": $check}"""))
+        }
+        val model = learning(click("Pliers, long nose"), met)
+
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            site.pages["tools.html"] = """<html><body><h1>Tools</h1><div><p>New!</p><a href="product.html">Pliers, long nose</a></div></body></html>"""
+            stock("In stock")
+            assertIs<ExecutionResult.Success>(execute())
+            assertEquals(5, model.requests.size)
+
+            assertIs<ExecutionResult.Success>(execute())
+            assertEquals(5, model.requests.size, "the run after the heal replays")
+        }
     }
 
     @Test

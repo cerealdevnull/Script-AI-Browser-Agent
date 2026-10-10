@@ -292,6 +292,40 @@ class RepeatTest {
         assertFalse(model.requests.any { EMAIL in it.text() })
     }
 
+    private val down: suspend (ModelRequest) -> List<ToolCall> = { throw ModelException("Model error: HTTP 503: overloaded", transient = true) }
+
+    // Finish without a Check: rejected twice, then reported "not met" uncached, so the next iteration asks the model again.
+    private val noCheck: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
+
+    @Test
+    fun `a transient failure loops quietly, three in a row end the task, and a good iteration resets the count`() {
+        stock("Out of stock")
+        val model = ScriptedModel(down, down, noCheck, noCheck, noCheck, down, down, down)
+
+        task(model) { execute ->
+            repeat(2) { assertEquals(7_000, assertIs<ExecutionResult.Loop>(execute()).delay) }
+            assertIs<ExecutionResult.Loop>(execute()) // a good iteration
+            repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
+            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+            assertTrue(host.logs.any { "transient failure 2 of 3" in it }, host.logs.joinToString("\n"))
+
+            val ended = execute()
+            assertIs<ExecutionResult.Error>(ended)
+            assertEquals("Model error: HTTP 503: overloaded", ended.message)
+        }
+        assertEquals(8, model.requests.size)
+        assertEquals("Failed: Model error: HTTP 503: overloaded\n0 steps, \$0.00", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a non-transient failure ends a monitor at once`() {
+        val model = ScriptedModel({ throw ModelException("Model/API key rejected: HTTP 401: invalid x-api-key") })
+
+        task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
+
+        assertEquals("Failed: Model/API key rejected: HTTP 401: invalid x-api-key\n0 steps, \$0.00", host.notifications.single().message)
+    }
+
     private companion object {
         const val EMAIL = "customer@practicesoftwaretesting.com"
         const val PASSWORD = "welcome01"

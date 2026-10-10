@@ -1,0 +1,39 @@
+# Self-hosted Toolshop (practicesoftwaretesting.com, sprint 5) for the G1 acceptance run: docs/acceptance.md.
+# Adapted from upstream's docker-compose.prod.yml (testsmith-io/practice-software-testing), without cron.
+# UI http://localhost:4200, API http://localhost:8091 (the UI image calls the API there).
+name: toolshop
+services:
+  laravel-api:
+    image: testsmith/practice-software-testing-sprint5-api
+    platform: linux/amd64 # published for amd64 only
+    environment:
+      - DB_PORT=3306
+      - DB_HOST=mariadb
+      - host=localhost
+    volumes:
+      - laravel-app-code:/var/www
+
+  angular-ui:
+    image: testsmith/practice-software-testing-sprint5-ui
+    platform: linux/amd64 # published for amd64 only
+    ports:
+      - 4200:4200
+    command: bash -c "ng serve --host 0.0.0.0 --port 4200"
+
+  web:
+    image: testsmith/practice-software-testing-web # published for arm64 only
+    ports:
+      - 8091:80
+    depends_on:
+      - laravel-api
+
+  mariadb:
+    image: yobasystems/alpine-mariadb:10.6.11
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: user
+      MYSQL_PASSWORD: root
+      MYSQL_DATABASE: toolshop
+
+volumes:
+  laravel-app-code:

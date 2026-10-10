@@ -25,7 +25,8 @@ sealed interface Message {
 
 class ToolCall(val id: String, val name: String, val args: JsonObject)
 
-class ToolResult(val callId: String, val text: String, val isError: Boolean = false)
+/** [imageJpeg]: a base64 JPEG attached to the result (the screenshot fallback). */
+class ToolResult(val callId: String, val text: String, val isError: Boolean = false, val imageJpeg: String? = null)
 
 class ModelTurn(
     val toolCalls: List<ToolCall>,

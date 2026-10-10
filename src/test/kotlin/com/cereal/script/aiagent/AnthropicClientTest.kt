@@ -116,6 +116,23 @@ class AnthropicClientTest {
         }
 
     @Test
+    fun `a screenshot goes back as an image block in the tool result`() =
+        runBlocking {
+            api.enqueue(MockResponse.Builder().body(toolUseResponse).build())
+
+            client.send(request(Message.User("Goal: x"), Message.ToolResults(listOf(ToolResult("toolu_1", "ok: screenshot", imageJpeg = "AAAA")))))
+
+            val result = Json.parseToJsonElement(api.takeRequest().body!!.utf8()).jsonObject["messages"]!!.jsonArray.last()
+                .jsonObject["content"]!!.jsonArray.single().jsonObject
+            assertEquals(
+                Json.parseToJsonElement(
+                    """[{"type":"text","text":"ok: screenshot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"AAAA"}}]""",
+                ),
+                result["content"],
+            )
+        }
+
+    @Test
     fun `an API error becomes a ModelException with the status and message`() {
         api.enqueue(
             MockResponse.Builder().code(401)

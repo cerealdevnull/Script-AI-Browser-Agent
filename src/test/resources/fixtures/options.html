@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><title>Toolshop - Options</title></head>
+<body>
+<h1>Options</h1>
+<label for="qty">Quantity</label>
+<select id="qty"><option value="1">One</option><option value="2">Two</option><option value="3">Three</option></select>
+<p id="chosen">Chosen: 1</p>
+<div style="height: 3000px"></div>
+<p>Bottom of page</p>
+<script>
+  document.getElementById('qty').addEventListener('change', e => {
+    document.getElementById('chosen').textContent = 'Chosen: ' + e.target.value;
+  });
+</script>
+</body>
+</html>

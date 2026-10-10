@@ -55,6 +55,7 @@ class AiAgentScript(
                     this.browser = null
                     dead.close()
                 }
+                statusUpdate("Starting Chrome")
                 Browser.launch(profilesDir.resolve(profileName(configuration)), pageLoadTimeoutMs).also { this.browser = it }
             } catch (e: CancellationException) {
                 throw e
@@ -74,8 +75,12 @@ class AiAgentScript(
                 configuration.secrets(),
                 scrubber,
                 configuration.allowedDomainSet(),
-                { confirm(configuration, provider, scrubber, it) },
+                {
+                    statusUpdate(scrubber.forLog("Waiting for your confirmation: ${it.action} on ${it.element}"))
+                    confirm(configuration, provider, scrubber, it)
+                },
                 configuration.runMode(),
+                { statusUpdate(scrubber.forLog(it)) },
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
@@ -110,6 +115,7 @@ class AiAgentScript(
                 is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
                 is Outcome.Declined -> "Declined by user"
             }
+        statusUpdate(scrubber.forLog(verdict))
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0

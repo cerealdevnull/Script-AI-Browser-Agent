@@ -78,6 +78,8 @@ class Agent(
     /** Asks the user to confirm an irreversible step; false = declined. */
     private val confirm: suspend (Confirmation) -> Boolean = { false },
     private val runMode: RunMode = RunMode.Once,
+    /** The task's one-line status in the Cereal UI: what the agent is doing right now. */
+    private val status: suspend (String) -> Unit = {},
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
@@ -92,6 +94,7 @@ class Agent(
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
     private val recorded = mutableListOf<Step>()
+    private var lastUrl: String? = null // for the "now on" log line
 
     /** True once a replay missed and the model took over mid-run. */
     var healed = false
@@ -101,7 +104,12 @@ class Agent(
     suspend fun run(resume: String? = null): Outcome {
         val current =
             try {
-                if (resume == null) browser.navigate(startUrl)
+                if (resume == null) {
+                    status("Opening $startUrl")
+                    log("opening $startUrl")
+                    browser.navigate(startUrl)
+                }
+                lastUrl = browser.url()
                 "Current page:"
             } catch (e: PageLoadException) {
                 loadFailure = "navigate" + JsonObject(mapOf("url" to JsonPrimitive(startUrl)))
@@ -116,6 +124,7 @@ class Agent(
             )
         while (true) {
             capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
+            status("Step ${steps + 1}: deciding the next action")
             // Retries and rate-limit waits happen inside send(): they are not steps.
             val turn =
                 try {
@@ -131,17 +140,20 @@ class Agent(
                 }
             cost += stepCost
             val u = turn.usage
+            val actions = turn.toolCalls.map { describe(it) }
+            turn.text?.takeIf { it.isNotBlank() }?.let { log("step $steps, model says: ${it.trim()}") }
             log(
-                "step $steps: ${turn.toolCalls.map { describe(it) }.joinToString().ifEmpty { "no tool call" }} " +
+                "step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} " +
                     "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
             if (turn.stopReason == "refusal") return Outcome.Failed("Model refused: ${turn.text ?: "no reason given"}", steps)
             if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
 
             val results = mutableListOf<ToolResult>()
-            for (call in turn.toolCalls) {
+            for ((i, call) in turn.toolCalls.withIndex()) {
                 val error = validate(call)
                 if (error != null) {
+                    warn("step $steps: ${call.name} has invalid arguments: $error")
                     results += ToolResult(call.id, "invalid arguments: $error", isError = true)
                     continue
                 }
@@ -162,6 +174,7 @@ class Agent(
                     }
                     "fail" -> return Outcome.Failed(call.args.str("reason"), steps)
                 }
+                status("Step $steps: ${actions[i]}")
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
                 if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
                 val target =
@@ -193,6 +206,7 @@ class Agent(
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     }
                 results += if (seen == STUCK_REPEATS) ToolResult(call.id, "$REPEATING\n${result.text}", isError = true, result.imageJpeg) else result
+                if (results.last().isError) warn("step $steps: ${actions[i]} failed: ${results.last().text.lineSequence().first().removePrefix("error: ")}") else logNewUrl()
             }
             messages += Message.ToolResults(results.map { ToolResult(it.callId, scrubber.forModel(it.text), it.isError, it.imageJpeg) })
         }
@@ -230,23 +244,30 @@ class Agent(
         return listOfNotNull(step.action, name, args.takeIf { it.isNotEmpty() }).joinToString(" ")
     }
 
-    /** Tool and target for the step log, e.g. `click link "Pliers"`. */
+    /** Tool, target and arguments for the step log, e.g. `click link "Pliers"` or `type textbox "Search" "pliers"`. */
     private suspend fun describe(call: ToolCall): String {
         if (validate(call) != null) return "${call.name} (invalid arguments)"
-        val target =
-            when (call.name) {
-                "click", "type" ->
-                    try {
-                        browser.describe(call.args.int("ref"))
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        "ref ${call.args.int("ref")}"
-                    }
-                "navigate" -> call.args.str("url")
-                else -> return call.name
+        val element =
+            (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let {
+                try {
+                    browser.describe(it)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "ref $it"
+                }
             }
-        return "${call.name} $target"
+        val detail =
+            when (call.name) {
+                "type" -> "\"${call.args.str("text")}\""
+                "select" -> "\"${call.args.str("option")}\""
+                "type_secret" -> "secret '${call.args.str("field")}'"
+                "navigate" -> call.args.str("url")
+                "scroll" -> call.args.str("direction")
+                "wait" -> "${call.args.int("seconds")}s"
+                else -> null
+            }
+        return listOfNotNull(call.name, element, detail).joinToString(" ")
     }
 
     /** Resolves each reported Readout on the live page: the verified ones, and an error per failing one. */
@@ -336,6 +357,8 @@ class Agent(
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
                     failed = "step ${i + 1} of ${cache.steps.size} (${describe(step)})"
+                    status("Replaying $failed")
+                    log("replaying $failed")
                     done = cache.steps.take(i)
                     val ref = step.fingerprint?.let { browser.refFor(it) ?: throw Miss("$at: no unique match for its target", "$failed: no unique match for its target") }
                     var args = step.args + ("irreversible" to JsonPrimitive(step.irreversible))
@@ -350,6 +373,8 @@ class Agent(
                     }
                 }
                 done = cache.steps
+                logNewUrl()
+                status("Replay: checking the result")
                 at = "the check"
                 failed = at
                 val goalMet = cache.check?.let { it.evaluate(browser) ?: throw Miss("the check's target does not match exactly one node", "the check's target is gone") } ?: true
@@ -376,6 +401,7 @@ class Agent(
             }
         // Healing runs outside the try: an error in the healing run is not another miss.
         log("replay miss: ${miss.rule}")
+        status("Replay missed: the model takes over")
         healed = true
         recorded += done
         // Step targets are page text: they reach the model only inside <page_content>.
@@ -482,6 +508,12 @@ class Agent(
             "never allowed: typing into a password, email or card field on an account-settings page"
         }
         return ref
+    }
+
+    private suspend fun logNewUrl() {
+        val url = browser.url()
+        if (url != lastUrl) log("now on $url")
+        lastUrl = url
     }
 
     private fun secretsNote() =

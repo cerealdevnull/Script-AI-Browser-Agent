@@ -24,9 +24,10 @@ fun isAllowedHost(host: String?, allowed: Set<String>): Boolean {
 
 /** A user's "Allowed domains" entry as a bare domain: scheme, port, path and a leading `*.` are dropped. */
 fun normalizeDomain(entry: String): String? {
-    val e = entry.trim()
+    // Before parsing: URI has no host for `https://*.example.com`.
+    val e = entry.trim().replace("*.", "")
     val host = if ("://" in e) runCatching { URI(e).host }.getOrNull() else e.substringBefore('/').substringBefore(':')
-    return host?.lowercase()?.removePrefix("*.")?.trim('.')?.ifEmpty { null }
+    return host?.lowercase()?.trim('.')?.ifEmpty { null }
 }
 
 fun hostOf(url: String): String? = runCatching { URI(url).host }.getOrNull()

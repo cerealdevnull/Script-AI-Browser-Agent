@@ -44,6 +44,36 @@ class ToolsTest {
     }
 
     @Test
+    fun `a later call in the same step whose refs an earlier action renumbered is not run`() {
+        // Typing adds a Clear button before Search: the Search button's ref moves from [2] to [3].
+        site.pages["search.html"] =
+            """<html><body><input aria-label="Query" id="q"><span id="slot"></span>
+            <button onclick="out.textContent = 'searched'">Search</button><p id="out"></p>
+            <script>q.addEventListener('input', () => { if (slot.firstChild) return; const b = document.createElement('button'); b.textContent = 'Clear'; b.onclick = () => { out.textContent = 'cleared' }; slot.append(b) })</script>
+            </body></html>"""
+        val model =
+            ScriptedModel(
+                {
+                    listOf(
+                        call("type", """{"ref": ${it.ref("textbox", "Query")}, "text": "pliers"}"""),
+                        call("click", """{"ref": ${it.ref("button", "Search")}}"""),
+                    )
+                },
+                {
+                    val (typed, clicked) = it.lastResults
+                    assertFalse(typed.isError, typed.text)
+                    assertTrue(clicked.isError && "stale" in clicked.text, clicked.text)
+                    assertFalse("cleared" in it.lastText, "the click hit the button that took the old ref:\n${it.lastText}")
+                    listOf(call("fail", """{"reason": "x"}"""))
+                },
+            )
+
+        run(model, "search.html")
+
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
     fun `the tool set is exactly the allow-list`() {
         assertEquals(
             setOf("read_page", "click", "type", "type_secret", "select", "scroll", "navigate", "go_back", "wait", "screenshot", "finish", "fail"),

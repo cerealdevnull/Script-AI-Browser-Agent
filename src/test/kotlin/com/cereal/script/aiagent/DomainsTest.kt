@@ -35,6 +35,7 @@ class DomainsTest {
     fun `user entries are normalised to a domain`() {
         assertEquals("pay.example.net", normalizeDomain(" https://Pay.Example.net:8443/checkout "))
         assertEquals("example.com", normalizeDomain("*.example.com"))
+        assertEquals("example.com", normalizeDomain("https://*.example.com/"))
         assertEquals("example.com", normalizeDomain(".example.com."))
         assertEquals(null, normalizeDomain("  "))
     }

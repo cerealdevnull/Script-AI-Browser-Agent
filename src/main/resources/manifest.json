@@ -1,0 +1,8 @@
+{
+  "package_name": "com.cereal.samplescript",
+  "name": "SampleScript",
+  "version_code": 1,
+  "sdk_version": "@cereal-sdk-version@",
+  "script": "com.cereal.script.sample.SampleScript",
+  "instructions": "Please make sure you already have an active account before using this script."
+}

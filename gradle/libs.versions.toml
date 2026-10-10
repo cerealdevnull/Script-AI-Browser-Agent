@@ -1,0 +1,22 @@
+[versions]
+kotlin = "2.4.10"
+shadow = "9.6.1"
+proguard = "7.9.1"
+cereal-licensing = "1.7.1"
+cereal-test-utils = "1.12.0"
+cereal-sdk = "1.12.0"
+kotlinx-coroutines = "1.11.0"
+mockk = "1.14.11"
+
+[libraries]
+cereal-sdk = { module = "com.cereal-automation:cereal-sdk", version.ref = "cereal-sdk" }
+cereal-licensing = { module = "com.cereal-automation:cereal-licensing", version.ref = "cereal-licensing" }
+cereal-test-utils = { module = "com.cereal-automation:cereal-test-utils", version.ref = "cereal-test-utils" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+proguard-gradle = { module = "com.guardsquare:proguard-gradle", version.ref = "proguard" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }

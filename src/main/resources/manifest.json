@@ -1,8 +1,8 @@
 {
-  "package_name": "com.cereal.samplescript",
-  "name": "SampleScript",
+  "package_name": "com.cereal.aibrowseragent",
+  "name": "AI Browser Agent",
   "version_code": 1,
   "sdk_version": "@cereal-sdk-version@",
-  "script": "com.cereal.script.sample.SampleScript",
-  "instructions": "Please make sure you already have an active account before using this script."
+  "script": "com.cereal.script.aiagent.AiAgentScript",
+  "instructions": "Type a goal and a start URL, pick a model and enter your own API key. The agent drives your installed Google Chrome in a visible window and notifies you with the result."
 }

@@ -1,0 +1,20 @@
+# AI browser agent — glossary
+
+- **goal run**: one `execute()` that tries to reach the goal.
+- **repeat run**: a goal run that comes back on a later `Loop` iteration or after a restart.
+- **run mode**: Once (reach the goal, notify the result) or Repeat (monitor until the goal's condition holds).
+- **step**: one LLM call. Replayed actions are not steps.
+- **snapshot**: the page as an accessibility tree sent to the model, inside a `<page_content>` block.
+- **ref**: `[n]`, the handle of an interactive element in the latest snapshot; older refs are invalid.
+- **text ref**: `[tN]`, a read-only ref on static text, a cell or a heading; only `finish` accepts it.
+- **replay cache**: the steps, Check and Readouts a learned run recorded, replayed later without the LLM.
+- **miss**: replay can't continue (no unique fingerprint match, URL off pattern, Check/Readout target not found).
+- **heal**: the LLM resuming mid-run after a miss and rewriting the cache tail.
+- **Check**: a true/false condition on one element that replay evaluates without the LLM.
+- **Readout**: a labelled element whose text is reported verbatim.
+- **irreversible step**: an action that buys, pays, deletes, sends or similar; it needs a confirmation.
+- **confirmation**: the Confirm/Decline dialog shown before an irreversible step.
+- **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
+- **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
+- **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
+- **run cap** / **task cap**: the step and dollar limits per goal run / per task.

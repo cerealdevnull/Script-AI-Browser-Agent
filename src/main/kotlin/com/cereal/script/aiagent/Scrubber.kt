@@ -11,9 +11,11 @@ class Scrubber(private val apiKey: String?) {
 
     fun reveal(name: String, secret: Secret): String = secret.reveal().also { if (it.isNotEmpty()) revealed[it] = name }
 
-    // Longest first, so a value containing another value is replaced whole.
-    // ponytail: the snapshot caps field values at 80 chars and the page at 14k, so a cut-off value isn't matched;
-    // scrub before truncating if longer secrets matter.
+    /** True once any secret was revealed (typed) in this run. */
+    val anyRevealed: Boolean get() = revealed.isNotEmpty()
+
+    // Longest first, so a value containing another value is replaced whole. Scrub before any truncation: a cut-off
+    // value no longer matches (the snapshot does this per node, see Browser.snapshot).
     fun forModel(text: String): String =
         revealed.entries.sortedByDescending { it.key.length }.fold(text) { t, (value, name) -> t.replace(value, "{{secret:$name}}") }
 

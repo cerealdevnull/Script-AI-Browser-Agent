@@ -82,6 +82,7 @@ class TestConfig(
     val model: String = "claude-opus-5-5",
     /** Secret slots 1..3 as (name, value). */
     val secrets: List<Pair<String?, Secret?>> = emptyList(),
+    val allowedDomains: List<String> = emptyList(),
 ) : AgentConfiguration {
     override fun goal() = goal
     override fun startUrl() = startUrl
@@ -98,6 +99,8 @@ class TestConfig(
     override fun secret2Value() = secrets.getOrNull(1)?.second
     override fun secret3Name() = secrets.getOrNull(2)?.first
     override fun secret3Value() = secrets.getOrNull(2)?.second
+    override fun allowedDomains() =
+        allowedDomains.map { d -> object : AgentConfiguration.AllowedDomain { override fun domain() = d } }.ifEmpty { null }
 }
 
 fun tempProfiles(): Path = Files.createTempDirectory("ai-agent-profiles")

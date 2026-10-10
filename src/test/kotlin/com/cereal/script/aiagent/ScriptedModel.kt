@@ -46,6 +46,20 @@ fun ModelRequest.ref(role: String, name: String): Int =
     Regex("""\[(\d+)] ${Regex.escape(role)} "${Regex.escape(name)}"""").find(lastText)?.groupValues?.get(1)?.toInt()
         ?: error("no $role \"$name\" in snapshot:\n$lastText")
 
+/** Everything a request carries as text. */
+fun ModelRequest.text() =
+    system + "\n" +
+        messages.joinToString("\n") { m ->
+            when (m) {
+                is Message.User -> m.text
+                is Message.ToolResults -> m.results.joinToString("\n") { it.text }
+                is Message.Assistant -> m.turn.toolCalls.joinToString { "${it.name}${it.args}" }
+            }
+        }
+
+/** The tool results the model was last sent. */
+val ModelRequest.lastResults: List<ToolResult> get() = (messages.last() as Message.ToolResults).results
+
 /** The `tN` text ref of the static text, cell or heading with this role and name in the latest snapshot. */
 fun ModelRequest.textRef(role: String, name: String): String =
     Regex("""\[(t\d+)] ${Regex.escape(role)} "${Regex.escape(name)}"""").find(lastText)?.groupValues?.get(1)

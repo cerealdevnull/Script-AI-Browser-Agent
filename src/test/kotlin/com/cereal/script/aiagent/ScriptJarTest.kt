@@ -50,6 +50,9 @@ class ScriptJarTest {
         assertTrue(functions.getValue("baseUrl").returnType.isMarkedNullable)
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
         assertTrue(functions.getValue("secret3Value").returnType.isMarkedNullable)
+        assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
+        val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
+        assertFalse(row.returnType.isMarkedNullable)
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->

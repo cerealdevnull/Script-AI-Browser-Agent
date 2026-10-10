@@ -30,6 +30,8 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     suspend fun url(): String = (tab.rawEvaluate("location.href") as? JsonPrimitive)?.contentOrNull ?: "?"
 
+    suspend fun title(): String = (tab.rawEvaluate("document.title") as? JsonPrimitive)?.contentOrNull.orEmpty()
+
     suspend fun navigate(url: String) = loading { tab.get(url) }
 
     fun describe(ref: Int): String = names[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
@@ -45,10 +47,36 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         element.sendKeys(text)
     }
 
+    /** Picks the `<select>` option whose visible text or value is [option]. */
+    suspend fun select(ref: Int, option: String) {
+        val js =
+            "el => { const o = [...(el.options || [])].find(o => o.text.trim() === ${JsonPrimitive(option)} || o.value === ${JsonPrimitive(option)}); " +
+                "if (!o) return false; el.value = o.value; " +
+                "el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true})); return true; }"
+        require((element(ref).rawApply(js) as? JsonPrimitive)?.contentOrNull == "true") { "[$ref] has no option '$option'" }
+        settle()
+    }
+
+    suspend fun scroll(down: Boolean) {
+        if (down) tab.scrollDown(80) else tab.scrollUp(80)
+        settle()
+    }
+
+    suspend fun goBack() {
+        tab.back()
+        settle()
+    }
+
+    suspend fun wait(seconds: Int) {
+        delay(seconds * 1000L)
+        settle()
+    }
+
+    suspend fun screenshotJpeg(): String = tab.screenshotB64()
+
     /** True for an enabled, writable text-like `<input>` or `<textarea>` (where a secret may be typed). */
     suspend fun isTextInput(ref: Int): Boolean {
-        val node = tab.dom.describeNode(backendNodeId = backendId(ref)).node
-        val attrs = node.attributes.orEmpty().chunked(2).associate { it[0].lowercase() to it.getOrElse(1) { "" } }
+        val (node, attrs) = node(ref)
         if ("disabled" in attrs || "readonly" in attrs) return false
         return when (node.nodeName.uppercase()) {
             "TEXTAREA" -> true
@@ -57,11 +85,24 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         }
     }
 
+    /** A password, email or payment-card field, judged by its type, autocomplete, name, id and accessible name. */
+    suspend fun isSensitiveField(ref: Int): Boolean {
+        val (_, attrs) = node(ref)
+        val text = listOf("type", "autocomplete", "name", "id").joinToString(" ") { attrs[it].orEmpty() } + " " + describe(ref)
+        return SENSITIVE.containsMatchIn(text.lowercase())
+    }
+
+    private suspend fun node(ref: Int) =
+        tab.dom.describeNode(backendNodeId = backendId(ref)).node.let { node ->
+            node to node.attributes.orEmpty().chunked(2).associate { it[0].lowercase() to it.getOrElse(1) { "" } }
+        }
+
     /**
      * The page as an indented accessibility tree. Interactive elements carry an `[n]` ref; static text, cells and
-     * headings a read-only `[tN]` ref (own ref space). Refs from older snapshots become invalid.
+     * headings a read-only `[tN]` ref (own ref space). Refs from older snapshots become invalid. [scrub] runs on names and values
+     * before they are cut, so a long secret can't leak in part.
      */
-    suspend fun snapshot(): String {
+    suspend fun snapshot(scrub: (String) -> String = { it }): String {
         val nodes = tab.accessibility.getFullAXTree().nodes
         val byId = nodes.associateBy { it.nodeId }
         val newRefs = mutableMapOf<Int, Int>()
@@ -72,7 +113,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         fun walk(id: String, depth: Int, parentName: String) {
             val node = byId[id] ?: return
             val role = node.role.text()
-            val name = node.name.text().replace(WHITESPACE, " ").take(160)
+            val name = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
             var childDepth = depth
             if (!node.ignored && role !in SKIP && !(role == "StaticText" && (name.isEmpty() || name == parentName))) {
                 out.append("  ".repeat(depth))
@@ -89,7 +130,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                 }
                 out.append(role)
                 if (name.isNotEmpty()) out.append(" \"").append(name).append('"')
-                val value = node.value.text()
+                val value = scrub(node.value.text())
                 if (value.isNotEmpty() && role in INTERACTIVE) out.append(" value=\"").append(value.take(80)).append('"')
                 node.properties?.forEach { p ->
                     val flag = p.name.name.lowercase()
@@ -136,6 +177,8 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         return DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
     }
 
+    private suspend fun settle() = loading {}
+
     /** Runs [action] and waits for the page to load: [PageLoadException] on a timeout or a Chrome network error page. */
     private suspend fun loading(action: suspend () -> Unit) {
         withTimeoutOrNull(pageLoadTimeoutMs) {
@@ -151,6 +194,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         private const val MAX_CHARS = 14_000
         private val TEXT_INPUT_TYPES = setOf("", "text", "email", "password", "search", "tel", "url")
         private val WHITESPACE = Regex("\\s+")
+        private val SENSITIVE = Regex("password|passwd|e-?mail|cc-|card|cvc|cvv|iban")
         private val FLAGS = setOf("disabled", "checked", "expanded", "selected")
         private val SKIP = setOf("none", "generic", "InlineTextBox", "LineBreak", "RootWebArea", "paragraph", "group", "list")
         private val TEXT = setOf("StaticText", "cell", "gridcell", "columnheader", "rowheader", "heading")

@@ -87,7 +87,8 @@ class AiAgentScript(
                 ExecutionResult.Error(outcome.reason)
             }
             is Outcome.Finished -> {
-                notify(configuration, provider, "$verdict\n${outcome.summary.take(300)}" + cost())
+                val readouts = outcome.readouts.joinToString("") { "${it.label}: ${it.text}\n" }
+                notify(configuration, provider, "$verdict\n$readouts${outcome.summary.take(300)}" + cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }

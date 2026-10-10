@@ -45,3 +45,8 @@ val ModelRequest.lastText: String
 fun ModelRequest.ref(role: String, name: String): Int =
     Regex("""\[(\d+)] ${Regex.escape(role)} "${Regex.escape(name)}"""").find(lastText)?.groupValues?.get(1)?.toInt()
         ?: error("no $role \"$name\" in snapshot:\n$lastText")
+
+/** The `tN` text ref of the static text, cell or heading with this role and name in the latest snapshot. */
+fun ModelRequest.textRef(role: String, name: String): String =
+    Regex("""\[(t\d+)] ${Regex.escape(role)} "${Regex.escape(name)}"""").find(lastText)?.groupValues?.get(1)
+        ?: error("no text ref $role \"$name\" in snapshot:\n$lastText")

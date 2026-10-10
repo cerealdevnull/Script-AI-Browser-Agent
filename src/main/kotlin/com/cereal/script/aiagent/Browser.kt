@@ -46,6 +46,18 @@ class Browser private constructor(private val browser: KBrowser) {
         element.sendKeys(text)
     }
 
+    /** True for an enabled, writable text-like `<input>` or `<textarea>` (where a secret may be typed). */
+    suspend fun isTextInput(ref: Int): Boolean {
+        val node = tab.dom.describeNode(backendNodeId = backendId(ref)).node
+        val attrs = node.attributes.orEmpty().chunked(2).associate { it[0].lowercase() to it.getOrElse(1) { "" } }
+        if ("disabled" in attrs || "readonly" in attrs) return false
+        return when (node.nodeName.uppercase()) {
+            "TEXTAREA" -> true
+            "INPUT" -> attrs["type"].orEmpty().lowercase() in TEXT_INPUT_TYPES
+            else -> false
+        }
+    }
+
     /**
      * The page as an indented accessibility tree. Interactive elements carry an `[n]` ref; static text, cells and
      * headings a read-only `[tN]` ref (own ref space). Refs from older snapshots become invalid.
@@ -117,8 +129,10 @@ class Browser private constructor(private val browser: KBrowser) {
 
     suspend fun close() = browser.stop()
 
+    private fun backendId(ref: Int) = refs[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
+
     private suspend fun element(ref: Int): DefaultElement {
-        val backendId = refs[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
+        val backendId = backendId(ref)
         tab.dom.scrollIntoViewIfNeeded(backendNodeId = backendId)
         return DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
     }
@@ -132,6 +146,7 @@ class Browser private constructor(private val browser: KBrowser) {
     companion object {
         private const val PAGE_LOAD_TIMEOUT_MS = 60_000L
         private const val MAX_CHARS = 14_000
+        private val TEXT_INPUT_TYPES = setOf("", "text", "email", "password", "search", "tel", "url")
         private val WHITESPACE = Regex("\\s+")
         private val FLAGS = setOf("disabled", "checked", "expanded", "selected")
         private val SKIP = setOf("none", "generic", "InlineTextBox", "LineBreak", "RootWebArea", "paragraph", "group", "list")

@@ -1,30 +1,15 @@
 package com.cereal.script.aiagent
 
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import java.io.IOException
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /** Anthropic Messages API over raw OkHttp (vendor SDKs don't load in the host's ScriptClassLoader). */
 class AnthropicClient(private val baseUrl: String, private val apiKey: String, private val model: String) : ModelClient {
@@ -56,21 +41,12 @@ class AnthropicClient(private val baseUrl: String, private val apiKey: String, p
                 )
                 put("messages", JsonArray(request.messages.map(::toJson)))
             }
-        val httpRequest =
-            Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/v1/messages")
-                .header("x-api-key", apiKey)
-                .header("anthropic-version", "2023-06-01")
-                .header("anthropic-beta", "server-side-fallback-2026-07-01")
-                .post(body.toString().toRequestBody(JSON))
-                .build()
-        val (code, text) = HTTP.newCall(httpRequest).await()
-        val json = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull()
-        if (code !in 200..299) {
-            val message = json?.get("error")?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull ?: text.take(300)
-            throw ModelException("HTTP $code: $message")
-        }
-        json ?: throw ModelException("unreadable response: ${text.take(300)}")
+        val json =
+            postJson(
+                "${baseUrl.trimEnd('/')}/v1/messages",
+                mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01", "anthropic-beta" to "server-side-fallback-2026-07-01"),
+                body,
+            )
         val content = json["content"]?.jsonArray ?: JsonArray(emptyList())
         val blocks = content.map { it.jsonObject }
         val usage = json["usage"] as? JsonObject
@@ -124,25 +100,5 @@ class AnthropicClient(private val baseUrl: String, private val apiKey: String, p
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.anthropic.com"
-        private val JSON = "application/json".toMediaType()
-        private val HTTP = OkHttpClient.Builder().readTimeout(10, TimeUnit.MINUTES).callTimeout(10, TimeUnit.MINUTES).build()
-
-        private fun JsonObject.str(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull
-
-        /** Runs the call on OkHttp's threads; cancelling the coroutine cancels the call. */
-        private suspend fun Call.await(): Pair<Int, String> =
-            suspendCancellableCoroutine { cont ->
-                cont.invokeOnCancellation { cancel() }
-                enqueue(
-                    object : Callback {
-                        override fun onFailure(call: Call, e: IOException) = cont.resumeWithException(ModelException("network error: ${e.message}"))
-
-                        override fun onResponse(call: Call, response: Response) {
-                            val result = runCatching { response.use { it.code to it.body.string() } }
-                            result.fold(cont::resume) { cont.resumeWithException(ModelException("network error: ${it.message}")) }
-                        }
-                    },
-                )
-            }
     }
 }

@@ -114,7 +114,22 @@ kotlin {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("scriptJar") }
+    useJUnitPlatform { excludeTags("scriptJar", "acceptance") }
+}
+
+// Opt-in acceptance runs on a real claude-opus-5-5 and Toolshop (docs/acceptance.md). They cost money and skip
+// without ANTHROPIC_API_KEY. Pick one with --tests, e.g. ./gradlew acceptanceTest --tests '*G2LoginReadTest'.
+tasks.register<Test>("acceptanceTest") {
+    description = "Run the opt-in acceptance goals G1-G3 against a real model"
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform { includeTags("acceptance") }
+    outputs.upToDateWhen { false } // a real run is never up to date
+    testLogging {
+        showStandardStreams = true
+        events("passed", "skipped", "failed")
+    }
 }
 
 // Loads the shrunk jar through a loader that mimics the host's ScriptClassLoader and runs one goal.

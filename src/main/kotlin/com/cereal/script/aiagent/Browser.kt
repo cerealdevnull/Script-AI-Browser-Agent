@@ -389,7 +389,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                 // websocket collectors must outlive it. kdriver detaches the browser's Job anyway; onFinish stops it.
                 createBrowser(CoroutineScope(Dispatchers.IO + SupervisorJob())) {
                     userDataDir = Path(profileDir.toString())
-                    headless = false
+                    headless = System.getProperty("aiagent.headless").toBoolean() // tests only: ./gradlew test -Pheadless=true
                     // A cold headed Chrome on a fresh profile is slow; kdriver's defaults are 500 ms x 60.
                     browserConnectionTimeout = 1_000
                     browserConnectionMaxTries = 90

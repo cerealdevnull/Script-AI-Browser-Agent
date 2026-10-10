@@ -57,7 +57,8 @@ class AiAgentScript(
             is Outcome.Failed -> fail(configuration, provider, outcome.reason, "\n" + stepCount(outcome.steps))
             is Outcome.Finished -> {
                 val verdict = if (outcome.goalMet) "Goal met" else "Goal not met"
-                notify(configuration, provider, "$verdict\n${outcome.summary.take(300)}\n" + stepCount(outcome.steps))
+                val readouts = outcome.readouts.joinToString("") { "${it.label}: ${it.text}\n" }
+                notify(configuration, provider, "$verdict\n$readouts${outcome.summary.take(300)}\n" + stepCount(outcome.steps))
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }

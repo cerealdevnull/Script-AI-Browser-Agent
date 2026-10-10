@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><title>Toolshop - Login</title></head>
+<body>
+<h1>Login</h1>
+<form id="login">
+  <label>Email address <input type="email" id="email"></label>
+  <label>Password <input type="password" id="password"></label>
+  <label><input type="checkbox" id="remember"> Remember me</label>
+  <button type="submit">Login</button>
+</form>
+<p id="status"></p>
+<script>
+  document.getElementById('login').addEventListener('submit', e => {
+    e.preventDefault();
+    const ok = document.getElementById('email').value === 'customer@practicesoftwaretesting.com'
+      && document.getElementById('password').value === 'welcome01';
+    document.getElementById('status').textContent = ok ? 'My account' : 'Invalid email or password';
+  });
+</script>
+</body>
+</html>

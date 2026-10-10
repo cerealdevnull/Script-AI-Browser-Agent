@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.ScriptConfiguration
 import com.cereal.sdk.ScriptConfigurationItem
+import com.cereal.sdk.ScriptConfigurationListItem
 import com.cereal.sdk.models.Secret
 
 // keyNames are persisted by the host: never change them.
@@ -112,7 +113,28 @@ interface AgentConfiguration : ScriptConfiguration {
         description = "Typed into the site when the agent asks for it by name; never shown to the model.",
     )
     fun secret3Value(): Secret?
+
+    @ScriptConfigurationItem(
+        position = 30,
+        keyName = "allowedDomains",
+        name = "Allowed domains",
+        description =
+            "Extra domains the agent may open, besides the start URL's own (e.g. a login or payment provider). " +
+                "Subdomains are included.",
+    )
+    fun allowedDomains(): List<AllowedDomain>?
+
+    // Nested so the shrunk jar's metadata restore (AgentConfiguration*.class) covers it: the host reflects on it.
+    interface AllowedDomain : ScriptConfigurationListItem {
+        @ScriptConfigurationItem(keyName = "domain", name = "Domain", description = "E.g. accounts.example.com or example-pay.com.")
+        fun domain(): String
+    }
 }
+
+/** The start URL's eTLD+1 plus the user's Allowed domains. */
+fun AgentConfiguration.allowedDomainSet(): Set<String> =
+    (listOfNotNull(hostOf(startUrl().trim())?.let(::registrableDomain)) + allowedDomains().orEmpty().mapNotNull { normalizeDomain(it.domain()) })
+        .toSet()
 
 /** Slots 1..3 as (name, value); blank counts as empty. */
 fun AgentConfiguration.secretSlots(): List<Pair<String?, Secret?>> =

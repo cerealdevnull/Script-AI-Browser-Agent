@@ -50,6 +50,7 @@ class AiAgentScript(
                     { log.info(scrubber.forLog(it)) },
                     configuration.secrets(),
                     scrubber,
+                    configuration.allowedDomainSet(),
                 ).run()
             } catch (e: ModelException) {
                 return fail(configuration, provider, scrubber.forLog("Model error: ${e.message}"))

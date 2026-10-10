@@ -134,6 +134,20 @@ class OpenAiCompatibleClientTest {
         }
 
     @Test
+    fun `a screenshot follows its tool message as a user image message`() =
+        runBlocking {
+            enqueue()
+
+            OpenAiCompatibleClient(baseUrl, null, "gpt-5")
+                .send(request(Message.User("Goal: x"), Message.ToolResults(listOf(ToolResult("call_1", "ok: screenshot", imageJpeg = "AAAA")))))
+
+            val sent = Json.parseToJsonElement(api.takeRequest().body!!.utf8()).jsonObject["messages"]!!.jsonArray.map { it.jsonObject }
+            assertEquals(listOf("system", "user", "tool", "user"), sent.map { it["role"]!!.jsonPrimitive.content })
+            val image = sent.last()["content"]!!.jsonArray.last().jsonObject
+            assertEquals("data:image/jpeg;base64,AAAA", image["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content)
+        }
+
+    @Test
     fun `an API error becomes a ModelException with the status and message`() {
         api.enqueue(MockResponse.Builder().code(401).body("""{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}""").build())
 

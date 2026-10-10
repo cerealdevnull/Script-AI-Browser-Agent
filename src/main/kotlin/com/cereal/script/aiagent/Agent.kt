@@ -28,13 +28,18 @@ class Readout(val label: String, val text: String, val fingerprint: Fingerprint)
 sealed interface Outcome {
     val steps: Int
 
-    /** [verified] is false when Readouts still failed validation after the retries (then nothing may be cached). */
+    /**
+     * [verified] is false when the Check or Readouts still failed validation after the retries (then nothing may be
+     * cached). [check]: the validated Check, if any; [recorded]: the actions taken, for the replay cache.
+     */
     class Finished(
         val goalMet: Boolean,
         val summary: String,
         override val steps: Int,
         val readouts: List<Readout> = emptyList(),
         val verified: Boolean = true,
+        val check: Check? = null,
+        val recorded: List<Step> = emptyList(),
     ) : Outcome
 
     /**
@@ -71,6 +76,7 @@ class Agent(
     private val allowedDomains: Set<String> = setOfNotNull(hostOf(startUrl)?.let(::registrableDomain)),
     /** Asks the user to confirm an irreversible step; false = declined. */
     private val confirm: suspend (Confirmation) -> Boolean = { false },
+    private val runMode: RunMode = RunMode.Once,
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
@@ -84,6 +90,7 @@ class Agent(
     private var finishRejections = 0
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
+    private val recorded = mutableListOf<Step>()
 
     suspend fun run(): Outcome {
         val current =
@@ -96,7 +103,7 @@ class Agent(
             }
         messages +=
             Message.User(
-                scrubber.forModel("Goal: $goal\n$ONCE_MODE\nStart page: $startUrl\n" + secretsNote() + "\n" + pageResult(current)),
+                scrubber.forModel("Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() + "\n" + pageResult(current)),
             )
         while (true) {
             capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
@@ -131,10 +138,14 @@ class Agent(
                 }
                 when (call.name) {
                     "finish" -> {
+                        val goalMet = call.args.bool("goal_met")
                         val (readouts, errors) = readouts(call.args["readouts"])
+                        val (check, checkError) = check(call.args["check"], goalMet)
+                        checkError?.let { errors += it }
                         if (errors.isEmpty() || finishRejections >= MAX_FINISH_RETRIES) {
-                            errors.forEach { log("Readout dropped after $MAX_FINISH_RETRIES retries, nothing cached: $it") }
-                            return Outcome.Finished(call.args.bool("goal_met"), call.args.str("summary"), steps, readouts, errors.isEmpty())
+                            errors.forEach { log("Not verified after $MAX_FINISH_RETRIES retries, nothing cached: $it") }
+                            val verified = errors.isEmpty()
+                            return Outcome.Finished(goalMet, call.args.str("summary"), steps, readouts, verified, check.takeIf { verified }, recorded.toList())
                         }
                         finishRejections++
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
@@ -144,9 +155,13 @@ class Agent(
                 }
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
                 if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
+                val target = (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let { runCatching { browser.stepTarget(it) }.getOrNull() }
                 val result =
                     try {
-                        act(call).also { loadFailure = null }
+                        act(call).also {
+                            loadFailure = null
+                            record(call, target)
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: DeclinedException) {
@@ -210,7 +225,7 @@ class Agent(
     }
 
     /** Resolves each reported Readout on the live page: the verified ones, and an error per failing one. */
-    private suspend fun readouts(json: JsonElement?): Pair<List<Readout>, List<String>> {
+    private suspend fun readouts(json: JsonElement?): Pair<List<Readout>, MutableList<String>> {
         val verified = mutableListOf<Readout>()
         val errors = mutableListOf<String>()
         for (r in (json as? JsonArray).orEmpty().map { it.jsonObject }) {
@@ -233,6 +248,78 @@ class Agent(
             if (error != null) errors += "Readout '$label': $error"
         }
         return verified to errors
+    }
+
+    /** Validates finish's Check on the live page: it must evaluate to [goalMet]. Repeat requires one. */
+    private suspend fun check(json: JsonElement?, goalMet: Boolean): Pair<Check?, String?> {
+        val c = json as? JsonObject ?: return null to if (runMode == RunMode.Repeat) "Repeat mode needs a check (see the goal message)" else null
+        val condition = c.str("condition")
+        val expected = (c["expected"] as? JsonPrimitive)?.contentOrNull
+        if (condition !in Check.CONDITIONS) return null to "Check: condition must be one of ${Check.CONDITIONS.joinToString()}"
+        if (condition.startsWith("text") && expected.isNullOrBlank()) return null to "Check: $condition needs expected text"
+        return try {
+            val check = Check(browser.fingerprint(c.str("ref")).json, condition, expected)
+            when (check.evaluate(browser)) {
+                null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
+                goalMet -> check to null
+                else -> null to "Check: it is ${!goalMet} on the live page, but goal_met is $goalMet"
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null to "Check: ${e.message}"
+        }
+    }
+
+    /** Adds a successful action to the replay record; [target] was taken before it ran (refs change after). */
+    private suspend fun record(call: ToolCall, target: String?) {
+        if (call.name == "read_page" || call.name == "screenshot") return
+        val args =
+            if (call.name == "type_secret") {
+                JsonObject(mapOf("text" to JsonPrimitive("{{secret:${call.args.str("field")}}}")))
+            } else {
+                JsonObject((call.args - "ref" - "irreversible").mapValues { (_, v) -> if (v is JsonPrimitive && v.isString) JsonPrimitive(scrubber.forModel(v.content)) else v })
+            }
+        val modelFlag = (call.args["irreversible"] as? JsonPrimitive)?.booleanOrNull == true
+        recorded += Step(call.name, target, args, modelFlag, urlPattern(browser.url()))
+    }
+
+    /**
+     * Replays a learned run without the model: each step through [act] (so the never-do rules and confirmations apply
+     * as in a live run), then the Check and Readouts. Null on a miss (logged): a step's target has no unique match,
+     * the page after a step isn't the recorded one, or a Check/Readout target has no unique match. "Not yet" is no miss.
+     */
+    suspend fun replay(cache: ReplayCache): Outcome? {
+        fun miss(rule: String): Outcome? = null.also { log("replay miss: $rule") }
+        try {
+            browser.navigate(startUrl)
+            for ((i, step) in cache.steps.withIndex()) {
+                val at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
+                browser.snapshot(scrubber::forModel)
+                val ref = step.fingerprint?.let { browser.refFor(it) ?: return miss("$at: no unique match for its target") }
+                var args = step.args + ("irreversible" to JsonPrimitive(step.irreversible))
+                if (ref != null) args = args + ("ref" to JsonPrimitive(ref))
+                if (step.action == "type_secret") args = mapOf("ref" to JsonPrimitive(ref), "field" to JsonPrimitive(step.args.str("text").removeSurrounding("{{secret:", "}}")))
+                try {
+                    act(ToolCall("replay", step.action, JsonObject(args)))
+                } catch (e: IllegalArgumentException) {
+                    return miss("$at: ${e.message}")
+                }
+                val url = urlPattern(browser.url())
+                if (url != step.urlPattern) return miss("$at: the page is $url, not ${step.urlPattern}")
+            }
+            val goalMet = cache.check?.let { it.evaluate(browser) ?: return miss("the check's target does not match exactly one node") } ?: true
+            val readouts =
+                cache.readouts.map { r ->
+                    val text = browser.resolve(Fingerprint(r.fingerprint)).singleOrNull() ?: return miss("readout '${r.label}' does not match exactly one node")
+                    Readout(r.label, text, Fingerprint(r.fingerprint))
+                }
+            return Outcome.Finished(goalMet, "", 0, readouts)
+        } catch (e: DeclinedException) {
+            return Outcome.Declined(0)
+        } catch (e: PageLoadException) {
+            return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
+        }
     }
 
     /**
@@ -365,6 +452,11 @@ class Agent(
             If you cannot make progress, call fail with the reason.
             """.trimIndent()
 
+        private const val REPEAT_MODE =
+            "Run mode: Repeat. This script re-checks the page on its own schedule and notifies the user when the goal's " +
+                "condition holds; don't look for a notify or alert feature on the site. Report whether the condition holds now " +
+                "(goal_met) and give a check: the element and condition that tell whether it holds, so later re-checks need no model."
+
         private const val ONCE_MODE =
             "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found."
 
@@ -374,6 +466,9 @@ class Agent(
                 "adding to a cart are not irreversible."
 
         private val IRREVERSIBLE_PROPS = arrayOf<Pair<String, Any>>("irreversible" to nullable("boolean"), "reason" to nullable("string"))
+
+        private fun nullable(schema: JsonObject) =
+            JsonObject(schema + ("type" to JsonArray(listOf(schema.getValue("type"), JsonPrimitive("null")))))
 
         private fun nullable(type: String) =
             buildJsonObject {
@@ -408,7 +503,9 @@ class Agent(
                     "finish",
                     "End the run. goal_met: whether the goal's condition holds; summary: what you found, for the user; " +
                         "readouts: values the user asked for, each a label, the [tN] (or [n]) ref showing it and its exact " +
-                        "text as value, or null.",
+                        "text as value, or null; check: how to tell later, without you, whether the condition holds: the [tN] " +
+                        "(or [n]) ref of one element and a condition (textContains / textAbsent with expected text, enabled, " +
+                        "exists; expected null for the last two). It must agree with goal_met now. Required in Repeat mode, else may be null.",
                     schema(
                         "goal_met" to "boolean",
                         "summary" to "string",
@@ -420,6 +517,7 @@ class Agent(
                                 }
                                 put("items", schema("label" to "string", "ref" to "string", "value" to "string"))
                             },
+                        "check" to nullable(schema("ref" to "string", "condition" to "string", "expected" to nullable("string"))),
                     ),
                 ),
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),

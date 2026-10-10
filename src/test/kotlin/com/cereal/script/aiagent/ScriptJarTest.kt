@@ -3,8 +3,6 @@ package com.cereal.script.aiagent
 import com.cereal.sdk.Script
 import com.cereal.sdk.ScriptConfiguration
 import com.cereal.sdk.models.Secret
-import com.cereal.test.ScriptStatus
-import com.cereal.test.TestScriptRunner
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -58,10 +56,14 @@ class ScriptJarTest {
             MockWebServer().use { api ->
                 api.dispatcher = FakeMessagesApi()
                 api.start()
+                val product = javaClass.getResource("/fixtures/product.html")!!.readText()
+                site.pages["product.html"] = product.replace("In stock", "Out of stock")
+                val repeat = loader.loadClass("${scriptClass.packageName}.RunMode").enumConstants.single { it.toString() == "Repeat" }
                 val values =
                     mapOf(
-                        "goal" to "Tell me whether Long Nose Pliers is in stock",
+                        "goal" to "Tell me when Long Nose Pliers is in stock",
                         "startUrl" to site.url(),
+                        "runMode" to repeat,
                         "baseUrl" to api.url("/").toString(),
                         "apiKey" to Secret("test-key"),
                     )
@@ -74,23 +76,35 @@ class ScriptJarTest {
                 @Suppress("UNCHECKED_CAST")
                 val script = scriptClass.getDeclaredConstructor().newInstance() as Script<ScriptConfiguration>
                 val host = Host()
-                val runner = TestScriptRunner(script)
-                runBlocking { runner.run(config, host) }
+                val provider = host.create()
+                runBlocking {
+                    script.onStart(config, provider)
+                    try {
+                        // Learns, writes the replay cache (serialization in the shrunk jar), then replays it.
+                        assertEquals("Loop", script.execute(config, provider) {}.javaClass.simpleName)
+                        site.pages["product.html"] = product
+                        assertEquals("Success", script.execute(config, provider) {}.javaClass.simpleName)
+                    } finally {
+                        script.onFinish(config, provider)
+                    }
+                }
 
-                assertEquals(ScriptStatus.Success, runner.status)
-                assertEquals("Goal met\nLong Nose Pliers is in stock.\n2 steps, $0.00", host.notifications.single().message)
+                assertEquals(2, api.requestCount)
+                assertEquals("Goal met\nreplayed, $0", host.notifications.single().message)
             }
         }
     }
 
-    /** Clicks the product link, then finishes once the page shows the stock flag. */
+    /** Clicks the product link, then finishes "not met" with a Check on the stock text. */
     private class FakeMessagesApi : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
             val body = request.body!!.utf8()
             val ref = Regex("""\[(\d+)] link \\"Long Nose Pliers\\"""").find(body)?.groupValues?.get(1)
+            val stock = Regex("""\[(t\d+)] StaticText \\"Out of stock\\"""").find(body)?.groupValues?.get(1)
             val toolUse =
-                if ("In stock" in body) {
-                    """{"type":"tool_use","id":"t2","name":"finish","input":{"goal_met":true,"summary":"Long Nose Pliers is in stock."}}"""
+                if (stock != null) {
+                    """{"type":"tool_use","id":"t2","name":"finish","input":{"goal_met":false,"summary":"Out of stock.","readouts":null,""" +
+                        """"check":{"ref":"$stock","condition":"textContains","expected":"In stock"}}}"""
                 } else {
                     """{"type":"tool_use","id":"t1","name":"click","input":{"ref":$ref}}"""
                 }

@@ -46,6 +46,17 @@ class ReadoutTest {
     }
 
     @Test
+    fun `a Once run with Readouts is cached, and the next run replays it with zero model calls`() {
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": ${readouts(it)}}""")) }))
+        val second = ScriptedModel()
+
+        assertIs<ExecutionResult.Success>(run(second))
+
+        assertTrue(second.requests.isEmpty())
+        assertEquals("Goal met\nInvoice number: INV-2026000042\nDate: 2026-10-01\nTotal: $27.30\nreplayed, $0", host.notifications.last().message)
+    }
+
+    @Test
     fun `an action tool given a text ref returns a tool error`() {
         val model =
             ScriptedModel(

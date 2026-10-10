@@ -75,11 +75,17 @@ class TestConfig(
     val startUrl: String = "http://127.0.0.1:1/",
     val apiKey: Secret? = Secret("test-key"),
     val baseUrl: String? = null,
+    val maxSteps: Int = 40,
+    val maxRunCost: Double = 3.0,
+    val maxTaskCost: Double = 10.0,
 ) : AgentConfiguration {
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl
     override fun apiKey() = apiKey
+    override fun maxSteps() = maxSteps
+    override fun maxRunCost() = maxRunCost
+    override fun maxTaskCost() = maxTaskCost
 }
 
 fun tempProfiles(): Path = Files.createTempDirectory("ai-agent-profiles")

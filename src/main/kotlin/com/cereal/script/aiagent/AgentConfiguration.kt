@@ -61,6 +61,30 @@ interface AgentConfiguration : ScriptConfiguration {
         description = "The model id, e.g. claude-opus-5-5.",
     )
     fun model(): String = "claude-opus-5-5"
+
+    @ScriptConfigurationItem(
+        position = 7,
+        keyName = "maxSteps",
+        name = "Max steps per run",
+        description = "Each model call is one step. A run that reaches this many steps stops.",
+    )
+    fun maxSteps(): Int = 40
+
+    @ScriptConfigurationItem(
+        position = 8,
+        keyName = "maxRunCost",
+        name = "Max $ per run",
+        description = "A run stops once its model calls have cost this many dollars.",
+    )
+    fun maxRunCost(): Double = 3.0
+
+    @ScriptConfigurationItem(
+        position = 9,
+        keyName = "maxTaskCost",
+        name = "Max $ per task",
+        description = "The task stops once all its runs together have cost this many dollars. Resets when the task restarts.",
+    )
+    fun maxTaskCost(): Double = 10.0
 }
 
 enum class RunMode { Once }

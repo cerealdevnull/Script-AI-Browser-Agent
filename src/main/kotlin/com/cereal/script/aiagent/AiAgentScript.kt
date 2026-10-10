@@ -71,14 +71,19 @@ class AiAgentScript(
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
         var replayed = false
-        val cost = { "\n" + if (replayed) "replayed, \$0" else stepCount(agent.steps) + ", " + usd(agent.cost) }
+        val cost = {
+            val steps = stepCount(agent.steps) + ", " + usd(agent.cost)
+            "\n" + if (agent.healed) "replayed + healed in $steps" else if (replayed) "replayed, \$0" else steps
+        }
         val outcome =
             try {
-                // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise (or on a miss) it learns.
+                // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise it learns.
                 val cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
-                // ponytail: a miss re-learns from the start URL; the heal ticket resumes mid-run from the failed step instead.
-                cache?.let { agent.replay(it) }?.also { replayed = true }
-                    ?: agent.run().also { if (it is Outcome.Finished) writeCache(provider, key, it, repeat) { m -> log.info(scrubber.forLog(m)) } }
+                replayed = cache != null
+                // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
+                (cache?.let { agent.replay(it) } ?: agent.run()).also {
+                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat) { m -> log.info(scrubber.forLog(m)) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -96,7 +101,7 @@ class AiAgentScript(
                 is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
                 is Outcome.Declined -> "Declined by user"
             }
-        log.info("run: ${configuration.runMode()}, ${if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
+        log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         return when (outcome) {
             is Outcome.Failed -> fail(configuration, provider, scrubber.forLog(outcome.reason), cost())
             is Outcome.Stopped -> {

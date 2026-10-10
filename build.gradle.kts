@@ -113,6 +113,16 @@ kotlin {
     compilerOptions { jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY) }
 }
 
+// A hung browser test fails instead of stalling the build: the longest real test (a heal) takes well under a minute.
+// SEPARATE_THREAD, because a test blocked in runBlocking may never see the interrupt of the default mode.
+tasks.withType<Test>().configureEach {
+    if (name != "acceptanceTest") {
+        systemProperty("junit.jupiter.execution.timeout.default", "3m")
+        systemProperty("junit.jupiter.execution.timeout.thread.mode.default", "SEPARATE_THREAD")
+    }
+    testLogging { events("failed") }
+}
+
 tasks.test {
     useJUnitPlatform { excludeTags("scriptJar", "acceptance") }
 }

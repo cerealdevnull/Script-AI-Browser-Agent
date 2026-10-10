@@ -9,6 +9,7 @@ import dev.kdriver.core.browser.createBrowser
 import dev.kdriver.core.dom.DefaultElement
 import dev.kdriver.core.tab.ReadyState
 import dev.kdriver.core.tab.Tab
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -212,22 +213,37 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     }
 
     /**
-     * The ref in the latest [snapshot] for a [stepTarget]: the one element with that role and name, else the element at
-     * its xpath. Null when there is no unique match (an ambiguous name is a miss, never a guess).
+     * The ref in the latest [snapshot] for a [stepTarget]: the one element with that role and name, else the element
+     * with that role at its xpath. Null when there is no unique match (an ambiguous name is a miss, never a guess).
      */
     suspend fun refFor(target: String): Int? {
         val json = Json.parseToJsonElement(target).jsonObject
-        val byName = names.filterValues { it == json.getValue("name").jsonPrimitive.content }.keys
+        val name = json.getValue("name").jsonPrimitive.content
+        val byName = names.filterValues { it == name }.keys
         if (byName.size > 1) return null
         byName.singleOrNull()?.let { return it }
         val xpath = JsonPrimitive(json.getValue("xpath").jsonPrimitive.content)
         val node = tab.runtime.evaluate("document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue")
         val objectId = node.result.objectId ?: return null
         val backendId = tab.dom.describeNode(objectId = objectId).node.backendNodeId
-        return refs.entries.firstOrNull { it.value == backendId }?.key
+        val ref = refs.entries.firstOrNull { it.value == backendId }?.key ?: return null
+        // Renamed is fine; another kind of element (a search box where the email field was) is a miss.
+        return ref.takeIf { names[ref]?.substringBefore(' ') == name.substringBefore(' ') }
     }
 
-    suspend fun close() = browser.stop()
+    /** False once Chrome exited (crashed, quit by the user) or its last tab was closed: launch a new one. */
+    val alive: Boolean get() = !browser.stopped && browser.mainTab != null
+
+    /** Stops Chrome. One that already died can't be asked to close (kdriver throws): nothing left to stop. */
+    suspend fun close() {
+        try {
+            browser.stop()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // already gone
+        }
+    }
 
     private fun backendId(ref: Int) = refs[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
 

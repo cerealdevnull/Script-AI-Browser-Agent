@@ -131,6 +131,22 @@ class ConfirmationTest {
     }
 
     @Test
+    fun `typing into a field named like an irreversible action asks only when Enter submits it`() {
+        site.pages["lookup.html"] = """<html><body><form action="order.html"><input aria-label="Order number"></form></body></html>"""
+        host.dialogAnswers += declineClicked
+        val model =
+            ScriptedModel(
+                { listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1"}""")) },
+                { listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1\n"}""")) },
+            )
+
+        assertEquals("Error: declined by user", run(model, "lookup.html").text)
+        assertEquals(2, model.requests.size, "the plain type asked nothing")
+        assertEquals(1, host.dialogs.size)
+        assertFalse("/order.html" in site.requested)
+    }
+
+    @Test
     fun `every click on an off-domain page asks`() {
         host.dialogAnswers += declineClicked
         // redirect.html sends the browser to localhost, which is not an allowed domain.

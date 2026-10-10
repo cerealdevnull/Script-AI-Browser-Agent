@@ -110,6 +110,78 @@ class SecretsTest {
     }
 
     @Test
+    fun `tasks with the same goal and URL but another account get their own Chrome profile`() {
+        val profiles = tempProfiles()
+        fun runAs(email: String) =
+            runBlocking {
+                host.run(
+                    AiAgentScript({ ScriptedModel({ listOf(call("fail", """{"reason": "x"}""")) }) }, profiles),
+                    TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(email))),
+                )
+            }
+
+        runAs(EMAIL)
+        runAs("someone-else@example.com")
+        runAs(EMAIL)
+
+        assertEquals(2, profiles.toFile().list()!!.size, "one profile per account, reused by the same account")
+    }
+
+    private fun runOn(page: String, model: ScriptedModel) =
+        runBlocking {
+            site.pages["me.html"] = """<html><body>$page<input aria-label="Email address"></body></html>"""
+            host.run(
+                AiAgentScript({ model }, tempProfiles()),
+                TestConfig(goal = "Show my balance", startUrl = site.url("me.html"), secrets = listOf("email" to Secret(EMAIL))),
+            )
+        }
+
+    private val typeEmail: suspend (ModelRequest) -> List<ToolCall> = {
+        listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}"""))
+    }
+
+    @Test
+    fun `a Readout showing a revealed secret is scrubbed in the notification`() {
+        val model =
+            ScriptedModel(
+                typeEmail,
+                {
+                    val readout = """{"label": "Email", "ref": "${it.textRef("StaticText", "{{secret:email}}")}", "value": "$EMAIL"}"""
+                    listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": [$readout], "check": null}"""))
+                },
+            )
+
+        assertIs<ExecutionResult.Success>(runOn("<p>Email:</p><p>$EMAIL</p>", model))
+
+        val message = host.notifications.single().message
+        assertTrue("Email: {{secret:email}}\n" in message, message)
+        assertFalse(EMAIL in message, message)
+    }
+
+    @Test
+    fun `a Readout located by a revealed secret is refused, so no secret lands in the cache`() {
+        val model =
+            ScriptedModel(
+                typeEmail,
+                {
+                    val readout = """{"label": "Balance", "ref": "${it.textRef("StaticText", "EUR 5.00")}", "value": "EUR 5.00"}"""
+                    listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": [$readout], "check": null}"""))
+                },
+                {
+                    val result = it.lastResults.single()
+                    assertTrue(result.isError && "secret" in result.text, result.text)
+                    listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": null, "check": null}"""))
+                },
+            )
+
+        runOn("<h2>$EMAIL</h2><p>EUR 5.00</p>", model)
+
+        assertEquals(3, model.requests.size)
+        val cache = runBlocking { host.create().preference().getString(ReplayCache.key("Show my balance", site.url("me.html"), setOf("email"))) }
+        assertFalse(cache.orEmpty().contains(EMAIL), cache)
+    }
+
+    @Test
     fun `an error carrying the API key or a revealed secret is logged scrubbed`() {
         val model =
             ScriptedModel(

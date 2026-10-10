@@ -164,7 +164,16 @@ class Agent(
                 }
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
                 if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
-                val target = (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let { runCatching { browser.stepTarget(it) }.getOrNull() }
+                val target =
+                    (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let {
+                        try {
+                            browser.stepTarget(it)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
                 val result =
                     try {
                         act(call).also {
@@ -248,7 +257,7 @@ class Agent(
             val (label, ref, value) = listOf("label", "ref", "value").map { r.str(it) }
             val error =
                 try {
-                    val fingerprint = browser.fingerprint(ref)
+                    val fingerprint = secretFree(browser.fingerprint(ref))
                     val texts = browser.resolve(fingerprint)
                     when {
                         texts.size != 1 -> "ref $ref matches ${texts.size} nodes, not exactly one"
@@ -274,7 +283,7 @@ class Agent(
         if (condition !in Check.CONDITIONS) return null to "Check: condition must be one of ${Check.CONDITIONS.joinToString()}"
         if (condition.startsWith("text") && expected.isNullOrBlank()) return null to "Check: $condition needs expected text"
         return try {
-            val check = Check(browser.fingerprint(c.str("ref")).json, condition, expected)
+            val check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected)
             when (check.evaluate(browser)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
@@ -285,6 +294,14 @@ class Agent(
         } catch (e: Exception) {
             null to "Check: ${e.message}"
         }
+    }
+
+    /** A Check or Readout fingerprint gets cached: refused when the page text it is found by holds a revealed secret. */
+    private fun secretFree(fingerprint: Fingerprint): Fingerprint {
+        val json = Json.parseToJsonElement(fingerprint.json).jsonObject
+        val texts = listOfNotNull(json["column"], json["anchor"]?.jsonObject?.get("text")).map { it.jsonPrimitive.content }
+        require(texts.all { scrubber.forModel(it) == it }) { "this element is found by page text that contains a secret; pick another element" }
+        return fingerprint
     }
 
     /** Adds a successful action to the replay record; [target] was taken before it ran (refs change after). */
@@ -305,59 +322,72 @@ class Agent(
      * as in a live run), then the Check and Readouts. On a miss (logged) the model heals: it resumes from the current
      * page with the steps done so far, and the outcome's `recorded` is those steps plus the healed tail. A miss: a
      * step's target has no unique match, the page after a step isn't the recorded one, or a Check/Readout target has no
-     * unique match. "Not yet" is no miss.
+     * unique match. Any other error while replaying (a stale node, a CDP error) is a miss too. "Not yet" is no miss.
      */
     suspend fun replay(cache: ReplayCache): Outcome {
-        suspend fun miss(rule: String, failed: String, done: List<Step>): Outcome {
-            log("replay miss: $rule")
-            healed = true
-            recorded += done
-            // Step targets are page text: they reach the model only inside <page_content>.
-            val steps = done.withIndex().joinToString("") { (i, s) -> "${i + 1}. ${describe(s)}\n" }
-            return run(
-                "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
-                    "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>$failed</page_content>\n",
-            )
-        }
-        try {
-            browser.navigate(startUrl)
-            for ((i, step) in cache.steps.withIndex()) {
-                val at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
-                val failed = "step ${i + 1} of ${cache.steps.size} (${describe(step)})"
-                val done = cache.steps.take(i)
-                browser.snapshot(scrubber::forModel)
-                val ref = step.fingerprint?.let { browser.refFor(it) ?: return miss("$at: no unique match for its target", "$failed: no unique match for its target", done) }
-                var args = step.args + ("irreversible" to JsonPrimitive(step.irreversible))
-                if (ref != null) args = args + ("ref" to JsonPrimitive(ref))
-                if (step.action == "type_secret") args = mapOf("ref" to JsonPrimitive(ref), "field" to JsonPrimitive(step.args.str("text").removeSurrounding("{{secret:", "}}")))
-                try {
+        // For a miss: where the replay was, and the steps done before it.
+        var at = "the start page"
+        var failed = at
+        var done = emptyList<Step>()
+        val miss =
+            try {
+                browser.navigate(startUrl)
+                browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
+                for ((i, step) in cache.steps.withIndex()) {
+                    at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
+                    failed = "step ${i + 1} of ${cache.steps.size} (${describe(step)})"
+                    done = cache.steps.take(i)
+                    val ref = step.fingerprint?.let { browser.refFor(it) ?: throw Miss("$at: no unique match for its target", "$failed: no unique match for its target") }
+                    var args = step.args + ("irreversible" to JsonPrimitive(step.irreversible))
+                    if (ref != null) args = args + ("ref" to JsonPrimitive(ref))
+                    if (step.action == "type_secret") args = mapOf("ref" to JsonPrimitive(ref), "field" to JsonPrimitive(step.args.str("text").removeSurrounding("{{secret:", "}}")))
                     act(ToolCall("replay", step.action, JsonObject(args)))
-                } catch (e: IllegalArgumentException) {
-                    return miss("$at: ${e.message}", "$failed: ${e.message}", done)
+                    val url = urlPattern(browser.url())
+                    if (url != step.urlPattern) {
+                        // The step ran, so it stays done, recorded with the page it really led to.
+                        done = done + Step(step.action, step.fingerprint, step.args, step.irreversible, url)
+                        throw Miss("$at: the page is $url, not ${step.urlPattern}", "$failed led to $url, not ${step.urlPattern}")
+                    }
                 }
-                val url = urlPattern(browser.url())
-                if (url != step.urlPattern) {
-                    // The step ran, so it stays done, recorded with the page it really led to.
-                    val ran = Step(step.action, step.fingerprint, step.args, step.irreversible, url)
-                    return miss("$at: the page is $url, not ${step.urlPattern}", "$failed led to $url, not ${step.urlPattern}", done + ran)
-                }
+                done = cache.steps
+                at = "the check"
+                failed = at
+                val goalMet = cache.check?.let { it.evaluate(browser) ?: throw Miss("the check's target does not match exactly one node", "the check's target is gone") } ?: true
+                val readouts =
+                    cache.readouts.map { r ->
+                        at = "readout '${r.label}'"
+                        failed = "the $at"
+                        val text =
+                            browser.resolve(Fingerprint(r.fingerprint)).singleOrNull()
+                                ?: throw Miss("readout '${r.label}' does not match exactly one node", "the readout '${r.label}' is gone")
+                        Readout(r.label, text, Fingerprint(r.fingerprint))
+                    }
+                return Outcome.Finished(goalMet, "", 0, readouts)
+            } catch (e: Miss) {
+                e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DeclinedException) {
+                return Outcome.Declined(0)
+            } catch (e: PageLoadException) {
+                return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
+            } catch (e: Exception) {
+                Miss("$at: ${e.message}", "$failed: ${e.message}")
             }
-            val all = cache.steps
-            val goalMet = cache.check?.let { it.evaluate(browser) ?: return miss("the check's target does not match exactly one node", "the check's target is gone", all) } ?: true
-            val readouts =
-                cache.readouts.map { r ->
-                    val text =
-                        browser.resolve(Fingerprint(r.fingerprint)).singleOrNull()
-                            ?: return miss("readout '${r.label}' does not match exactly one node", "the readout '${r.label}' is gone", all)
-                    Readout(r.label, text, Fingerprint(r.fingerprint))
-                }
-            return Outcome.Finished(goalMet, "", 0, readouts)
-        } catch (e: DeclinedException) {
-            return Outcome.Declined(0)
-        } catch (e: PageLoadException) {
-            return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
-        }
+        // Healing runs outside the try: an error in the healing run is not another miss.
+        log("replay miss: ${miss.rule}")
+        healed = true
+        recorded += done
+        // Step targets are page text: they reach the model only inside <page_content>.
+        val steps = done.withIndex().joinToString("") { (i, s) -> "${i + 1}. ${describe(s)}\n" }
+        return run(
+            "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
+                "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>${miss.failed}</page_content>\n",
+        )
     }
+
+    /** A replay miss: [rule] for the log, [failed] for the healing model. */
+    private class Miss(val rule: String, val failed: String) : Exception(rule)
 
     /**
      * Runs an action tool; the result carries a fresh snapshot. Results name targets by ref only: element names are

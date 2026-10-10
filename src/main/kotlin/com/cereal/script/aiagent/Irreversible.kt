@@ -12,13 +12,17 @@ class Irreversible(private val browser: Browser, private val allowedDomains: Set
         secretInputs += browser.nodeId(ref)
     }
 
-    /** Deterministic: an off-domain page, a buy/pay/... name on the target or the form it submits, or a submit on a checkout URL. */
+    /**
+     * Deterministic: an off-domain page, a buy/pay/... name on the target or the form it submits, or a submit on a
+     * checkout URL. A `type` that doesn't submit changes nothing yet, so a field named e.g. "Order number" doesn't ask.
+     */
     suspend fun heuristic(action: String, ref: Int, text: String?): Boolean {
         if (!isAllowedHost(hostOf(browser.url()), allowedDomains)) return true
-        val name = browser.describe(ref).substringAfter('"')
-        if (IRREVERSIBLE.containsMatchIn(name.lowercase())) return true
         val form = browser.form(ref)
-        return submits(action, text, form) && (IRREVERSIBLE.containsMatchIn(form.submitName.lowercase()) || CHECKOUT.containsMatchIn(browser.url().lowercase()))
+        val submits = submits(action, text, form)
+        val name = browser.describe(ref).substringAfter('"')
+        if ((action == "click" || submits) && IRREVERSIBLE.containsMatchIn(name.lowercase())) return true
+        return submits && (IRREVERSIBLE.containsMatchIn(form.submitName.lowercase()) || CHECKOUT.containsMatchIn(browser.url().lowercase()))
     }
 
     /** A submit of a form with exactly one password input that `type_secret` filled, on an allowed domain, outside checkout/payment. */

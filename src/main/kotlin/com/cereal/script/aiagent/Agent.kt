@@ -23,20 +23,34 @@ sealed interface Outcome {
     class Finished(val goalMet: Boolean, val summary: String, override val steps: Int) : Outcome
 
     class Failed(val reason: String, override val steps: Int) : Outcome
+
+    /** A step or cost cap was hit. */
+    class Stopped(val reason: String, override val steps: Int) : Outcome
 }
 
-/** One goal run: the model drives [browser], one step (model call) at a time, until finish, fail or the step cap. */
+/** [taskSpent]: what earlier runs of this task cost, counted against [maxTaskCost]. */
+class Caps(val maxSteps: Int, val maxRunCost: Double, val maxTaskCost: Double, val taskSpent: Double = 0.0)
+
+/** One goal run: the model drives [browser], one step (model call) at a time, until finish, fail or a cap. */
 class Agent(
     private val browser: Browser,
     private val model: ModelClient,
     private val goal: String,
     private val startUrl: String,
+    private val caps: Caps,
     private val log: (String) -> Unit,
+    private val warn: (String) -> Unit,
     private val secrets: Map<String, Secret> = emptyMap(),
     private val scrubber: Scrubber = Scrubber(null),
 ) {
     private val messages = mutableListOf<Message>()
-    private var steps = 0
+    private val unpriced = mutableSetOf<String?>()
+    var steps = 0
+        private set
+
+    /** Dollars spent by this run so far. */
+    var cost = 0.0
+        private set
 
     suspend fun run(): Outcome {
         browser.navigate(startUrl)
@@ -47,13 +61,19 @@ class Agent(
                 ),
             )
         while (true) {
-            if (steps >= MAX_STEPS) return Outcome.Failed("Step limit reached: $MAX_STEPS steps", steps)
+            capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
             steps++
             val turn = model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList()))
             messages += Message.Assistant(turn)
+            val stepCost =
+                Prices.cost(turn.model, turn.usage) ?: 0.0.also {
+                    if (unpriced.add(turn.model)) warn("no price known for model ${turn.model}: counted as \$0, only the step cap applies")
+                }
+            cost += stepCost
+            val u = turn.usage
             log(
-                "step $steps: ${turn.toolCalls.joinToString { "${it.name}${it.args}" }.ifEmpty { "no tool call" }} " +
-                    "(${turn.usage.input} in / ${turn.usage.output} out / ${turn.usage.cacheRead} cache-read tokens, model ${turn.model})",
+                "step $steps: ${turn.toolCalls.map { describe(it) }.joinToString().ifEmpty { "no tool call" }} " +
+                    "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
             if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
 
@@ -79,6 +99,33 @@ class Agent(
             }
             messages += Message.ToolResults(results.map { ToolResult(it.callId, scrubber.forModel(it.text), it.isError) })
         }
+    }
+
+    private fun capReached(): String? =
+        when {
+            steps >= caps.maxSteps -> "max steps per run (${caps.maxSteps})"
+            cost >= caps.maxRunCost -> "max \$ per run (${usd(caps.maxRunCost)})"
+            caps.taskSpent + cost >= caps.maxTaskCost -> "max \$ per task (${usd(caps.maxTaskCost)})"
+            else -> null
+        }
+
+    /** Tool and target for the step log, e.g. `click link "Pliers"`. */
+    private suspend fun describe(call: ToolCall): String {
+        if (validate(call) != null) return "${call.name} (invalid arguments)"
+        val target =
+            when (call.name) {
+                "click", "type" ->
+                    try {
+                        browser.describe(call.args.int("ref"))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        "ref ${call.args.int("ref")}"
+                    }
+                "navigate" -> call.args.str("url")
+                else -> return call.name
+            }
+        return "${call.name} $target"
     }
 
     /** Runs an action tool; the result always carries a fresh snapshot. */
@@ -123,8 +170,6 @@ class Agent(
         "$prefix\nurl: ${browser.url()}\n<page_content>\n${browser.snapshot()}</page_content>"
 
     companion object {
-        const val MAX_STEPS = 40
-
         private val SYSTEM_PROMPT =
             """
             You operate one Chrome tab to achieve the user's goal. Act only through the tools.

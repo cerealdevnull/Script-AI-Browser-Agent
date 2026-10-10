@@ -36,6 +36,15 @@ class ConfigValidationTest {
     fun `a secret value needs a name`() =
         assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Secret 2 has a value but no name")
 
+    @Test
+    fun `step cap must be positive`() = assertRejected(TestConfig(maxSteps = 0), "Max steps per run must be > 0")
+
+    @Test
+    fun `run cost cap must be positive`() = assertRejected(TestConfig(maxRunCost = 0.0), "Max $ per run must be > 0")
+
+    @Test
+    fun `task cost cap must be positive`() = assertRejected(TestConfig(maxTaskCost = -1.0), "Max $ per task must be > 0")
+
     /** An invalid config ends with Error and a notification, and makes no model call. */
     private fun assertRejected(config: TestConfig, reason: String) =
         runBlocking {

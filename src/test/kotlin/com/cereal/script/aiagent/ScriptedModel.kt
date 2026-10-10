@@ -7,7 +7,12 @@ import kotlinx.serialization.json.JsonObject
  * A fake model behind [ModelClient]. Each turn is a function of the request it answers, so a turn can pick a ref
  * from the snapshot it was sent. Records every request.
  */
-class ScriptedModel(vararg turns: suspend (ModelRequest) -> List<ToolCall>) : ModelClient {
+class ScriptedModel(
+    vararg turns: suspend (ModelRequest) -> List<ToolCall>,
+    private val usage: Usage = Usage(1000, 100),
+    /** The responding model per turn; [MODEL] once the list runs out. */
+    private val models: List<String> = emptyList(),
+) : ModelClient {
     private val turns = ArrayDeque(turns.toList())
     val requests = mutableListOf<ModelRequest>()
 
@@ -15,7 +20,7 @@ class ScriptedModel(vararg turns: suspend (ModelRequest) -> List<ToolCall>) : Mo
         requests += request
         val turn = turns.removeFirstOrNull() ?: error("ScriptedModel: no turn left for request ${requests.size}")
         val calls = turn(request)
-        return ModelTurn(calls, "tool_use", MODEL, Usage(1000, 100), raw = null)
+        return ModelTurn(calls, "tool_use", models.getOrElse(requests.size - 1) { MODEL }, usage, raw = null)
     }
 
     companion object {

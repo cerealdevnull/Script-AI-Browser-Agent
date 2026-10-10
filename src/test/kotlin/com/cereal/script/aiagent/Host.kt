@@ -75,6 +75,9 @@ class TestConfig(
     val startUrl: String = "http://127.0.0.1:1/",
     val apiKey: Secret? = Secret("test-key"),
     val baseUrl: String? = null,
+    val maxSteps: Int = 40,
+    val maxRunCost: Double = 3.0,
+    val maxTaskCost: Double = 10.0,
     val provider: Provider = Provider.Anthropic,
     val model: String = "claude-opus-5-5",
     /** Secret slots 1..3 as (name, value). */
@@ -84,6 +87,9 @@ class TestConfig(
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl
     override fun apiKey() = apiKey
+    override fun maxSteps() = maxSteps
+    override fun maxRunCost() = maxRunCost
+    override fun maxTaskCost() = maxTaskCost
     override fun provider() = provider
     override fun model() = model
     override fun secret1Name() = secrets.getOrNull(0)?.first

@@ -75,11 +75,15 @@ class TestConfig(
     val startUrl: String = "http://127.0.0.1:1/",
     val apiKey: Secret? = Secret("test-key"),
     val baseUrl: String? = null,
+    val provider: Provider = Provider.Anthropic,
+    val model: String = "claude-opus-5-5",
 ) : AgentConfiguration {
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl
     override fun apiKey() = apiKey
+    override fun provider() = provider
+    override fun model() = model
 }
 
 fun tempProfiles(): Path = Files.createTempDirectory("ai-agent-profiles")

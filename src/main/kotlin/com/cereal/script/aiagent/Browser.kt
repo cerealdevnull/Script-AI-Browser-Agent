@@ -13,9 +13,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.io.files.Path
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import dev.kdriver.core.browser.Browser as KBrowser
 
@@ -91,6 +94,24 @@ class Browser private constructor(private val browser: KBrowser) {
         val (_, attrs) = node(ref)
         val text = listOf("type", "autocomplete", "name", "id").joinToString(" ") { attrs[it].orEmpty() } + " " + describe(ref)
         return SENSITIVE.containsMatchIn(text.lowercase())
+    }
+
+    /** The DOM node behind [ref], stable while the page stays loaded (identifies an input across snapshots). */
+    fun nodeId(ref: Int): Int = backendId(ref)
+
+    /** The form [ref] belongs to, as far as submitting it matters. */
+    suspend fun form(ref: Int): FormInfo {
+        val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
+        val info = tab.runtime.callFunctionOn(FORM_JS, objectId = objectId, returnByValue = true)
+        info.exceptionDetails?.let { error("form lookup failed: ${it.text}") }
+        val json = Json.parseToJsonElement((info.result.value as JsonPrimitive).content).jsonObject
+        val password = tab.runtime.callFunctionOn(PASSWORD_JS, objectId = objectId).result.objectId
+        return FormInfo(
+            inForm = json.getValue("inForm").jsonPrimitive.boolean,
+            clickSubmits = json.getValue("clickSubmits").jsonPrimitive.boolean,
+            submitName = json.getValue("submitName").jsonPrimitive.content,
+            passwordNode = password?.let { tab.dom.describeNode(objectId = it).node.backendNodeId },
+        )
     }
 
     private suspend fun node(ref: Int) =
@@ -210,6 +231,22 @@ class Browser private constructor(private val browser: KBrowser) {
             const bodyRows = t => Array.from(t.rows).filter(r => r !== header(t) && r.parentElement.tagName !== 'THEAD');
         """
 
+        private const val SUBMIT_SELECTOR = "button:not([type]), button[type=submit], input[type=submit], input[type=image]"
+
+        private const val FORM_JS = """function() {
+            const form = this.form || this.closest('form');
+            const submit = form && form.querySelector('$SUBMIT_SELECTOR');
+            const name = submit ? (submit.getAttribute('aria-label') || submit.innerText || submit.value || '') : '';
+            return JSON.stringify({inForm: !!form, clickSubmits: !!form && this.matches('$SUBMIT_SELECTOR'), submitName: name.replace(/\s+/g, ' ').trim()});
+        }"""
+
+        // The form's password input when it has exactly one, else null.
+        private const val PASSWORD_JS = """function() {
+            const form = this.form || this.closest('form');
+            const inputs = form ? form.querySelectorAll('input[type=password]') : [];
+            return inputs.length === 1 ? inputs[0] : null;
+        }"""
+
         private const val FINGERPRINT_JS = """function() {
             $JS_HELPERS
             const node = this.nodeType === 3 ? this.parentElement : this;
@@ -293,6 +330,9 @@ class Browser private constructor(private val browser: KBrowser) {
             )
     }
 }
+
+/** [passwordNode]: the form's only password input ([Browser.nodeId]), null when it has none or several. */
+class FormInfo(val inForm: Boolean, val clickSubmits: Boolean, val submitName: String, val passwordNode: Int?)
 
 /** Where a Check or Readout target is, independent of its own text: opaque JSON, evaluated by [Browser.resolve]. */
 data class Fingerprint(val json: String)

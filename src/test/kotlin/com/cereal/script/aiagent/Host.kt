@@ -15,7 +15,8 @@ import com.cereal.test.components.TestComponentProviderFactory
 import com.cereal.test.components.TestLicenseComponent
 import com.cereal.test.components.TestPreferenceComponent
 import com.cereal.test.components.TestScriptLauncherComponent
-import com.cereal.test.components.TestUserInteractionComponent
+import com.cereal.sdk.component.userinteraction.UserInteractionComponent
+import com.cereal.sdk.component.userinteraction.WebResourceRequest
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -23,6 +24,12 @@ import java.nio.file.Path
 class Host : ComponentProviderFactory {
     val notifications = mutableListOf<Notification>()
     val logs = mutableListOf<String>()
+
+    /** The HTML of every `showHtml` dialog, in order. */
+    val dialogs = mutableListOf<String>()
+
+    /** What the next `showHtml` calls answer: a [WebResourceRequest] the dialog navigated to, or a Throwable to throw. */
+    val dialogAnswers = ArrayDeque<Any>()
 
     private val provider =
         TestComponentProvider(
@@ -40,7 +47,21 @@ class Host : ComponentProviderFactory {
             TestLicenseComponent(),
             TestPreferenceComponent(),
             TestScriptLauncherComponent(TestComponentProviderFactory(), null),
-            TestUserInteractionComponent(emptyList(), emptyList(), emptyList()),
+            object : UserInteractionComponent {
+                override suspend fun showHtml(title: String, html: String, shouldFinish: (WebResourceRequest) -> Boolean): WebResourceRequest {
+                    dialogs += html
+                    val answer = dialogAnswers.removeFirstOrNull() ?: error("Host: no answer left for dialog ${dialogs.size}")
+                    if (answer is Throwable) throw answer
+                    return (answer as WebResourceRequest).also { check(shouldFinish(it)) { "shouldFinish rejected ${it.url}" } }
+                }
+
+                override suspend fun showUrl(title: String, url: String, headers: Map<String, String>, shouldFinish: (WebResourceRequest) -> Boolean) =
+                    error("showUrl is not used")
+
+                override suspend fun requestInput(title: String, description: String) = error("requestInput is not used")
+
+                override suspend fun showContinueButton() = error("showContinueButton is not used")
+            },
             RecordingArtifactComponent(),
         )
 
@@ -102,5 +123,9 @@ class TestConfig(
     override fun allowedDomains() =
         allowedDomains.map { d -> object : AgentConfiguration.AllowedDomain { override fun domain() = d } }.ifEmpty { null }
 }
+
+/** What the dialog's Confirm / Decline links navigate to. */
+val confirmClicked = WebResourceRequest("GET", emptyMap(), "https://cereal-confirm.invalid/confirm", null)
+val declineClicked = WebResourceRequest("GET", emptyMap(), "https://cereal-confirm.invalid/decline", null)
 
 fun tempProfiles(): Path = Files.createTempDirectory("ai-agent-profiles")

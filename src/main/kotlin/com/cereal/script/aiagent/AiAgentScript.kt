@@ -24,10 +24,15 @@ class AiAgentScript(
     // The task cap counts every run of this task; held in memory only, so it resets when the task restarts.
     private var taskSpent = 0.0
 
+    // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
+    private var scrubber: Scrubber? = null
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
+        scrubber = null
+        if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
 
@@ -37,7 +42,7 @@ class AiAgentScript(
         statusUpdate: suspend (message: String) -> Unit,
     ): ExecutionResult {
         configError?.let { return fail(configuration, provider, it) }
-        val scrubber = Scrubber(configuration.apiKey()?.reveal())
+        val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
         val browser =
             browser ?: try {
@@ -61,11 +66,19 @@ class AiAgentScript(
                 scrubber,
                 configuration.allowedDomainSet(),
                 { confirm(configuration, provider, scrubber, it) },
+                configuration.runMode(),
             )
-        val cost = { "\n" + stepCount(agent.steps) + ", " + usd(agent.cost) }
+        val repeat = configuration.runMode() == RunMode.Repeat
+        val key = cacheKey(configuration)
+        var replayed = false
+        val cost = { "\n" + if (replayed) "replayed, \$0" else stepCount(agent.steps) + ", " + usd(agent.cost) }
         val outcome =
             try {
-                agent.run()
+                // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise (or on a miss) it learns.
+                val cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
+                // ponytail: a miss re-learns from the start URL; the heal ticket resumes mid-run from the failed step instead.
+                cache?.let { agent.replay(it) }?.also { replayed = true }
+                    ?: agent.run().also { if (it is Outcome.Finished) writeCache(provider, key, it, repeat) { m -> log.info(scrubber.forLog(m)) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -83,7 +96,7 @@ class AiAgentScript(
                 is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
                 is Outcome.Declined -> "Declined by user"
             }
-        log.info("run: ${configuration.runMode()}, learned, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
+        log.info("run: ${configuration.runMode()}, ${if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         return when (outcome) {
             is Outcome.Failed -> fail(configuration, provider, scrubber.forLog(outcome.reason), cost())
             is Outcome.Stopped -> {
@@ -94,9 +107,12 @@ class AiAgentScript(
                 notify(configuration, provider, verdict + cost())
                 ExecutionResult.Error("declined by user")
             }
+            // A monitor stays quiet until the goal is met.
+            is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.joinToString("") { "${it.label}: ${it.text}\n" }
-                notify(configuration, provider, "$verdict\n$readouts${outcome.summary.take(300)}" + cost())
+                val summary = if (repeat || outcome.summary.isEmpty()) "" else scrubber.forLog(outcome.summary).take(300) + "\n"
+                notify(configuration, provider, "$verdict\n$readouts$summary".removeSuffix("\n") + cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }
@@ -108,6 +124,23 @@ class AiAgentScript(
         val browser = browser ?: return
         this.browser = null
         withContext(NonCancellable) { browser.close() }
+    }
+
+    /**
+     * Stores what a finished learned run can replay. Not when the Check or Readouts failed validation; a run that found
+     * the goal already met keeps no Check (it can't show the Check tells met from not met); a Once run needs a Check or a Readout.
+     */
+    private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, log: (String) -> Unit) {
+        val check = run.check.takeUnless { run.goalMet }
+        val skipped =
+            when {
+                !run.verified -> "the Check or Readouts failed validation"
+                !repeat && check == null && run.readouts.isEmpty() -> "a Once run without a Check or Readout"
+                else -> null
+            }
+        if (skipped != null) return log("replay cache not written: $skipped")
+        val readouts = run.readouts.map { CachedReadout(it.label, it.fingerprint.json) }
+        provider.preference().setString(key, ReplayCache(run.recorded, check, readouts).toJson())
     }
 
     /** Notifies, then shows the Confirm / Decline dialog (no timeout). Closing it, or any dialog error, is a Decline. */
@@ -160,6 +193,7 @@ class AiAgentScript(
             config.maxSteps() <= 0 -> "Max steps per run must be > 0"
             config.maxRunCost() <= 0 -> "Max \$ per run must be > 0"
             config.maxTaskCost() <= 0 -> "Max \$ per task must be > 0"
+            config.repeatInterval() <= 0 -> "Repeat interval must be > 0"
             else -> validateSecrets(config)
         }
     }
@@ -173,6 +207,8 @@ class AiAgentScript(
         val names = slots.mapNotNull { it.first }
         return names.groupBy { it }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { "Secret names must be unique: $it" }
     }
+
+    private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
 
     // ponytail: the SDK gives scripts no task id, so the profile is keyed by goal + start URL. Two tasks with the
     // same goal and URL share a profile (and can't run at the same time); key by task id if the SDK ever offers one.

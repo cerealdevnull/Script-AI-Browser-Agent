@@ -104,7 +104,13 @@ class TestConfig(
     /** Secret slots 1..3 as (name, value). */
     val secrets: List<Pair<String?, Secret?>> = emptyList(),
     val allowedDomains: List<String> = emptyList(),
+    val runMode: RunMode = RunMode.Once,
+    val repeatInterval: Int = 300,
+    val reLearn: Boolean = false,
 ) : AgentConfiguration {
+    override fun runMode() = runMode
+    override fun repeatInterval() = repeatInterval
+    override fun reLearn() = reLearn
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl

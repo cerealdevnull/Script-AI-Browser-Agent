@@ -27,6 +27,23 @@ class ToolsTest {
         }
 
     @Test
+    fun `a newline in type presses Enter and submits the form`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("type", """{"ref": ${it.ref("textbox", "Email address")}, "text": "customer@practicesoftwaretesting.com"}""")) },
+                { listOf(call("type", """{"ref": ${it.ref("textbox", "Password")}, "text": "welcome01\n"}""")) },
+                {
+                    assertTrue("My account" in it.lastText, it.lastText)
+                    listOf(call("finish", """{"goal_met": true, "summary": "Logged in."}"""))
+                },
+            )
+
+        run(model, "login.html")
+
+        assertEquals(3, model.requests.size)
+    }
+
+    @Test
     fun `the tool set is exactly the allow-list`() {
         assertEquals(
             setOf("read_page", "click", "type", "type_secret", "select", "scroll", "navigate", "go_back", "wait", "screenshot", "finish", "fail"),

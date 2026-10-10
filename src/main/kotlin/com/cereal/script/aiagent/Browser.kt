@@ -3,6 +3,7 @@ package com.cereal.script.aiagent
 import dev.kdriver.cdp.domain.Accessibility
 import dev.kdriver.cdp.domain.accessibility
 import dev.kdriver.cdp.domain.dom
+import dev.kdriver.cdp.domain.input
 import dev.kdriver.cdp.domain.runtime
 import dev.kdriver.core.browser.createBrowser
 import dev.kdriver.core.dom.DefaultElement
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.files.Path
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -44,10 +46,19 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         loading { element.click() }
     }
 
+    /** Types [text]; each `\n` presses Enter (kdriver's sendKeys only sends characters, which never submits a form). */
     suspend fun type(ref: Int, text: String) {
         val element = element(ref)
         element.clearInput()
-        element.sendKeys(text)
+        text.split('\n').forEachIndexed { i, line ->
+            if (i > 0) {
+                loading {
+                    tab.input.dispatchKeyEvent("keyDown", key = "Enter", code = "Enter", windowsVirtualKeyCode = 13, text = "\r")
+                    tab.input.dispatchKeyEvent("keyUp", key = "Enter", code = "Enter", windowsVirtualKeyCode = 13)
+                }
+            }
+            if (line.isNotEmpty()) element.sendKeys(line)
+        }
     }
 
     /** Picks the `<select>` option whose visible text or value is [option]. */
@@ -185,8 +196,36 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     }
 
     /** The whitespace-collapsed text of every node [fingerprint] matches on the live page: unique when size is 1. */
-    suspend fun resolve(fingerprint: Fingerprint): List<String> =
-        (tab.rawEvaluate("($RESOLVE_JS)(${fingerprint.json})") as JsonArray).map { it.jsonPrimitive.content }
+    suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).map { it.text }
+
+    /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled. */
+    suspend fun matches(fingerprint: Fingerprint): List<Match> =
+        (tab.rawEvaluate("($RESOLVE_JS)(${fingerprint.json})") as JsonArray).map {
+            Match(it.jsonObject.getValue("text").jsonPrimitive.content, it.jsonObject.getValue("enabled").jsonPrimitive.boolean)
+        }
+
+    /** Where an action's target is, for replay: its `role "name"` plus an xpath fallback (opaque JSON for [refFor]). */
+    suspend fun stepTarget(ref: Int): String {
+        val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
+        val xpath = (tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true).result.value as JsonPrimitive).content
+        return JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString()
+    }
+
+    /**
+     * The ref in the latest [snapshot] for a [stepTarget]: the one element with that role and name, else the element at
+     * its xpath. Null when there is no unique match (an ambiguous name is a miss, never a guess).
+     */
+    suspend fun refFor(target: String): Int? {
+        val json = Json.parseToJsonElement(target).jsonObject
+        val byName = names.filterValues { it == json.getValue("name").jsonPrimitive.content }.keys
+        if (byName.size > 1) return null
+        byName.singleOrNull()?.let { return it }
+        val xpath = JsonPrimitive(json.getValue("xpath").jsonPrimitive.content)
+        val node = tab.runtime.evaluate("document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue")
+        val objectId = node.result.objectId ?: return null
+        val backendId = tab.dom.describeNode(objectId = objectId).node.backendNodeId
+        return refs.entries.firstOrNull { it.value == backendId }?.key
+    }
 
     suspend fun close() = browser.stop()
 
@@ -234,7 +273,21 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             const isAnchor = e => !!e.closest('h1,h2,h3,h4,h5,h6,label,th,dt,caption,legend') || own(e).endsWith(':');
             const header = t => t.tHead ? t.tHead.rows[0] : t.rows[0];
             const bodyRows = t => Array.from(t.rows).filter(r => r !== header(t) && r.parentElement.tagName !== 'THEAD');
+            const xpath = n => {
+                const parts = [];
+                for (; n && n.nodeType === 1; n = n.parentElement) {
+                    let i = 1;
+                    for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) i++;
+                    parts.unshift(n.tagName.toLowerCase() + '[' + i + ']');
+                }
+                return '/' + parts.join('/');
+            };
         """
+
+        private const val XPATH_JS = """function() {
+            $JS_HELPERS
+            return xpath(this);
+        }"""
 
         private const val SUBMIT_SELECTOR = "button:not([type]), button[type=submit], input[type=submit], input[type=image]"
 
@@ -256,15 +309,6 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             $JS_HELPERS
             const node = this.nodeType === 3 ? this.parentElement : this;
             let el = node;
-            const xpath = n => {
-                const parts = [];
-                for (; n && n.nodeType === 1; n = n.parentElement) {
-                    let i = 1;
-                    for (let s = n.previousElementSibling; s; s = s.previousElementSibling) if (s.tagName === n.tagName) i++;
-                    parts.unshift(n.tagName.toLowerCase() + '[' + i + ']');
-                }
-                return '/' + parts.join('/');
-            };
             const cell = node.closest('td,th');
             const table = cell && cell.closest('table');
             if (table && cell.parentElement !== header(table)) {
@@ -316,7 +360,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                 const e = document.evaluate(fp.xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
                 found = e && e.tagName.toLowerCase() === fp.tag ? [e] : [];
             }
-            return found.map(text);
+            return found.map(e => ({text: text(e), enabled: !e.matches(':disabled') && e.getAttribute('aria-disabled') !== 'true'}));
         }"""
 
         private fun Accessibility.AXValue?.text() = (this?.value as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
@@ -357,6 +401,9 @@ class FormInfo(val inForm: Boolean, val clickSubmits: Boolean, val submitName: S
 
 /** A page didn't load: a timeout or a network error. Transient: a later attempt may work. */
 class PageLoadException(message: String) : Exception(message)
+
+/** A node a [Fingerprint] matched on the live page. */
+class Match(val text: String, val enabled: Boolean)
 
 /** Where a Check or Readout target is, independent of its own text: opaque JSON, evaluated by [Browser.resolve]. */
 data class Fingerprint(val json: String)

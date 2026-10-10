@@ -27,7 +27,9 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 2,
         keyName = "runMode",
         name = "Run mode",
-        description = "Once: reach the goal and notify the result.",
+        description =
+            "Once: reach the goal and notify the result. Repeat: a monitor. The first run learns with the model; later checks replay " +
+                "it without the model and notify once when the goal is met.",
     )
     fun runMode(): RunMode = RunMode.Once
 
@@ -91,6 +93,14 @@ interface AgentConfiguration : ScriptConfiguration {
     fun maxTaskCost(): Double = 10.0
 
     @ScriptConfigurationItem(
+        position = 10,
+        keyName = "repeatInterval",
+        name = "Repeat interval (seconds)",
+        description = "Repeat mode only: how long to wait between checks.",
+    )
+    fun repeatInterval(): Int = 300
+
+    @ScriptConfigurationItem(
         position = 20,
         keyName = "secret1Name",
         name = "Secret 1 name",
@@ -148,6 +158,16 @@ interface AgentConfiguration : ScriptConfiguration {
     )
     fun allowedDomains(): List<AllowedDomain>?
 
+    @ScriptConfigurationItem(
+        position = 40,
+        keyName = "reLearn",
+        name = "Re-learn",
+        description =
+            "Forget what was learned for this goal when the task starts (e.g. after the site changed). " +
+                "The Chrome profile is kept: log out on the site, or delete the task, to reset it.",
+    )
+    fun reLearn(): Boolean = false
+
     // Nested so the shrunk jar's metadata restore (AgentConfiguration*.class) covers it: the host reflects on it.
     interface AllowedDomain : ScriptConfigurationListItem {
         @ScriptConfigurationItem(keyName = "domain", name = "Domain", description = "E.g. accounts.example.com or example-pay.com.")
@@ -169,6 +189,6 @@ fun AgentConfiguration.secretSlots(): List<Pair<String?, Secret?>> =
 fun AgentConfiguration.secrets(): Map<String, Secret> =
     secretSlots().mapNotNull { (name, value) -> if (name != null && value != null) name to value else null }.toMap()
 
-enum class RunMode { Once }
+enum class RunMode { Once, Repeat }
 
 enum class Provider { Anthropic, OpenAICompatible }

@@ -61,6 +61,29 @@ class SecretsTest {
     }
 
     @Test
+    fun `a secret longer than the snapshot's value cap never reaches the model, not even in part`() {
+        val long = "x9" + "Q".repeat(60) + "tail-" + "Z".repeat(60)
+        val model =
+            ScriptedModel(
+                { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
+                {
+                    assertTrue("{{secret:email}}" in it.lastText, it.lastText)
+                    listOf(call("fail", """{"reason": "x"}"""))
+                },
+            )
+
+        runBlocking {
+            host.run(
+                AiAgentScript({ model }, tempProfiles()),
+                TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(long))),
+            )
+        }
+
+        val outbound = model.requests.joinToString("\n") { it.text() }
+        assertFalse("QQQQQQQQ" in outbound, outbound)
+    }
+
+    @Test
     fun `type_secret into a non-text element or an unknown slot is a tool error`() {
         val model =
             ScriptedModel(
@@ -100,17 +123,6 @@ class SecretsTest {
         assertTrue(host.logs.any { "upstream echoed {{api_key}} and {{secret:email}}" in it }, host.logs.joinToString("\n"))
         assertFalse(host.logs.any { API_KEY in it || EMAIL in it })
     }
-
-    /** Everything a request carries as text. */
-    private fun ModelRequest.text() =
-        system + "\n" +
-            messages.joinToString("\n") { m ->
-                when (m) {
-                    is Message.User -> m.text
-                    is Message.ToolResults -> m.results.joinToString("\n") { it.text }
-                    is Message.Assistant -> m.turn.toolCalls.joinToString { "${it.name}${it.args}" }
-                }
-            }
 
     private companion object {
         const val EMAIL = "customer@practicesoftwaretesting.com"

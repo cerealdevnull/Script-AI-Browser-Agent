@@ -95,7 +95,31 @@ class AnthropicClient(
                                     buildJsonObject {
                                         put("type", "tool_result")
                                         put("tool_use_id", r.callId)
-                                        put("content", r.text)
+                                        if (r.imageJpeg == null) {
+                                            put("content", r.text)
+                                        } else {
+                                            put(
+                                                "content",
+                                                buildJsonArray {
+                                                    add(
+                                                        buildJsonObject {
+                                                            put("type", "text")
+                                                            put("text", r.text)
+                                                        },
+                                                    )
+                                                    add(
+                                                        buildJsonObject {
+                                                            put("type", "image")
+                                                            putJsonObject("source") {
+                                                                put("type", "base64")
+                                                                put("media_type", "image/jpeg")
+                                                                put("data", r.imageJpeg)
+                                                            }
+                                                        },
+                                                    )
+                                                },
+                                            )
+                                        }
                                         if (r.isError) put("is_error", true)
                                     },
                                 )

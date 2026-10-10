@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head><title>Redirecting</title>
+<script>
+  // The page itself sends the browser to another "domain" (localhost instead of 127.0.0.1), like an SSO hop.
+  location.replace(location.href.replace('127.0.0.1', 'localhost').replace('redirect.html', 'login.html'));
+</script>
+</head>
+<body><p>Redirecting…</p></body>
+</html>

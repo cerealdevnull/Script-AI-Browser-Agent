@@ -57,6 +57,7 @@ class AiAgentScript(
                 { log.warn(scrubber.forLog(it)) },
                 configuration.secrets(),
                 scrubber,
+                configuration.allowedDomainSet(),
             )
         val cost = { "\n" + stepCount(agent.steps) + ", " + usd(agent.cost) }
         val outcome =

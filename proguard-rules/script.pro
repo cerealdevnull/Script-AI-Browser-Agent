@@ -54,7 +54,7 @@
 
 -ignorewarnings
 
--keep class kotlin.Metadata
+# No -keep class kotlin.Metadata: with the stdlib as a library jar ProGuard's Kotlin-metadata pass fails.
 
 # Keep the configuration annotations
 -keepclassmembers class * {
@@ -70,3 +70,17 @@
 
 # Keep the enum class so that annotations are preserved.
 -keep enum * {}
+
+# Bundled libraries (kdriver, ktor, okhttp, kotlinx-serialization), rules from the #59 spike.
+-dontwarn **
+-keep class kotlinx.serialization.** { *; }
+-keepclassmembers class ** { *** Companion; kotlinx.serialization.KSerializer serializer(...); }
+-keep class org.apache.commons.logging.** { *; }
+-keep class * implements io.ktor.client.HttpClientEngineContainer { *; }
+-adaptresourcefilenames META-INF/services/**
+-adaptresourcefilecontents META-INF/services/**
+# Atomic field updaters look these up by name (missing: NoSuchFieldException readHandlerReference).
+-keepclassmembers class ** { volatile <fields>; }
+-keep class dev.kdriver.core.** { *; }
+# The optimizer produces VerifyErrors in kdriver/ktor code.
+-dontoptimize

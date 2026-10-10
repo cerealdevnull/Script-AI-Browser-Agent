@@ -22,12 +22,12 @@ jobs:
             ${{ runner.os }}-gradle-
       - name: Make gradlew executable
         run: chmod +x ./gradlew
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
-          java-version: 17
+          java-version: 21
           distribution: jetbrains
       - name: Test
-        run: ./gradlew test
-      - name: Smoke test build
-        run: ./gradlew scriptJar
+        run: xvfb-run ./gradlew test # browser tests launch a headed Chrome
+      - name: Shrunk script jar runs through a host-like class loader
+        run: xvfb-run ./gradlew scriptJarTest

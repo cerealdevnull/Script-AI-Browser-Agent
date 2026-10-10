@@ -1,0 +1,109 @@
+package com.cereal.script.aiagent
+
+import com.cereal.sdk.ExecutionResult
+import com.cereal.sdk.Script
+import com.cereal.sdk.component.ComponentProvider
+import com.cereal.sdk.component.notification.Notification
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import java.net.URI
+import java.nio.file.Path
+import java.security.MessageDigest
+
+class AiAgentScript(
+    private val newModelClient: (AgentConfiguration) -> ModelClient = {
+        AnthropicClient(it.baseUrl()?.takeIf(String::isNotBlank) ?: AnthropicClient.DEFAULT_BASE_URL, it.apiKey()!!.reveal(), it.model())
+    },
+    private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
+) : Script<AgentConfiguration> {
+    private var configError: String? = null
+    private var browser: Browser? = null
+
+    // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
+    override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
+        configError = validate(configuration)
+        return true
+    }
+
+    override suspend fun execute(
+        configuration: AgentConfiguration,
+        provider: ComponentProvider,
+        statusUpdate: suspend (message: String) -> Unit,
+    ): ExecutionResult {
+        configError?.let { return fail(configuration, provider, it) }
+        val log = provider.logger()
+        val browser =
+            browser ?: try {
+                Browser.launch(profilesDir.resolve(profileName(configuration))).also { browser = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return fail(configuration, provider, "Chrome could not be started: ${e.message}")
+            }
+        val outcome =
+            try {
+                Agent(browser, newModelClient(configuration), configuration.goal(), configuration.startUrl().trim()) { log.info(it) }.run()
+            } catch (e: ModelException) {
+                return fail(configuration, provider, "Model error: ${e.message}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
+                log.error("goal run failed", e)
+                return fail(configuration, provider, "Unexpected error: ${e.message}")
+            }
+        return when (outcome) {
+            is Outcome.Failed -> fail(configuration, provider, outcome.reason, "\n" + stepCount(outcome.steps))
+            is Outcome.Finished -> {
+                val verdict = if (outcome.goalMet) "Goal met" else "Goal not met"
+                notify(configuration, provider, "$verdict\n${outcome.summary.take(300)}\n" + stepCount(outcome.steps))
+                // A Once run that answers "not met" still completed its job.
+                ExecutionResult.Success(verdict)
+            }
+        }
+    }
+
+    // The host calls this from `finally`, also when the task is cancelled: stop Chrome even in a cancelled coroutine.
+    override suspend fun onFinish(configuration: AgentConfiguration, provider: ComponentProvider) {
+        val browser = browser ?: return
+        this.browser = null
+        withContext(NonCancellable) { browser.close() }
+    }
+
+    private suspend fun fail(
+        config: AgentConfiguration,
+        provider: ComponentProvider,
+        reason: String,
+        suffix: String = "",
+    ): ExecutionResult {
+        notify(config, provider, "Failed: $reason$suffix")
+        return ExecutionResult.Error(reason)
+    }
+
+    private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, body: String) {
+        provider.notification().sendNotification(Notification("AI agent: " + config.goal().take(60), body))
+    }
+
+    private fun validate(config: AgentConfiguration): String? {
+        val scheme = runCatching { URI(config.startUrl().trim()).scheme?.lowercase() }.getOrNull()
+        return when {
+            config.goal().isBlank() -> "Goal is required"
+            config.startUrl().isBlank() -> "Start URL is required"
+            scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
+            config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
+            config.model().isBlank() -> "Model is required"
+            else -> null
+        }
+    }
+
+    // ponytail: the SDK gives scripts no task id, so the profile is keyed by goal + start URL. Two tasks with the
+    // same goal and URL share a profile (and can't run at the same time); key by task id if the SDK ever offers one.
+    private fun profileName(config: AgentConfiguration): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest("${config.goal()}\n${config.startUrl().trim()}".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+            .take(16)
+}
+
+private fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"

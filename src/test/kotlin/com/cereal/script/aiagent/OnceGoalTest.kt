@@ -35,7 +35,7 @@ class OnceGoalTest {
         assertIs<ExecutionResult.Success>(result)
         val notification = host.notifications.single()
         assertEquals("AI agent: Tell me whether Long Nose Pliers is in stock", notification.title)
-        assertEquals("Goal met\nLong Nose Pliers is in stock at $14.15.\n2 steps", notification.message)
+        assertEquals("Goal met\nLong Nose Pliers is in stock at $14.15.\n2 steps, $0.01", notification.message)
     }
 
     @Test
@@ -46,7 +46,7 @@ class OnceGoalTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("The product page shows no stock information.", result.message)
-        assertEquals("Failed: The product page shows no stock information.\n1 step", host.notifications.single().message)
+        assertEquals("Failed: The product page shows no stock information.\n1 step, $0.01", host.notifications.single().message)
     }
 
     @Test

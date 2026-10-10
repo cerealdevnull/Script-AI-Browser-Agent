@@ -20,9 +20,13 @@ class AiAgentScript(
     private var configError: String? = null
     private var browser: Browser? = null
 
+    // The task cap counts every run of this task; held in memory only, so it resets when the task restarts.
+    private var taskSpent = 0.0
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
+        taskSpent = 0.0
         return true
     }
 
@@ -41,23 +45,39 @@ class AiAgentScript(
             } catch (e: Exception) {
                 return fail(configuration, provider, "Chrome could not be started: ${e.message}")
             }
+        val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
+        val agent =
+            Agent(browser, newModelClient(configuration), configuration.goal(), configuration.startUrl().trim(), caps, log::info, log::warn)
+        val cost = { "\n" + stepCount(agent.steps) + ", " + usd(agent.cost) }
         val outcome =
             try {
-                Agent(browser, newModelClient(configuration), configuration.goal(), configuration.startUrl().trim()) { log.info(it) }.run()
+                agent.run()
             } catch (e: ModelException) {
-                return fail(configuration, provider, "Model error: ${e.message}")
+                return fail(configuration, provider, "Model error: ${e.message}", cost())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
                 log.error("goal run failed", e)
-                return fail(configuration, provider, "Unexpected error: ${e.message}")
+                return fail(configuration, provider, "Unexpected error: ${e.message}", cost())
+            } finally {
+                taskSpent += agent.cost
             }
+        val verdict =
+            when (outcome) {
+                is Outcome.Failed -> "Failed: ${outcome.reason}"
+                is Outcome.Stopped -> "Stopped: ${outcome.reason}"
+                is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
+            }
+        log.info("run: ${configuration.runMode()}, learned, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         return when (outcome) {
-            is Outcome.Failed -> fail(configuration, provider, outcome.reason, "\n" + stepCount(outcome.steps))
+            is Outcome.Failed -> fail(configuration, provider, outcome.reason, cost())
+            is Outcome.Stopped -> {
+                notify(configuration, provider, verdict + cost())
+                ExecutionResult.Error(outcome.reason)
+            }
             is Outcome.Finished -> {
-                val verdict = if (outcome.goalMet) "Goal met" else "Goal not met"
-                notify(configuration, provider, "$verdict\n${outcome.summary.take(300)}\n" + stepCount(outcome.steps))
+                notify(configuration, provider, "$verdict\n${outcome.summary.take(300)}" + cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }
@@ -93,6 +113,9 @@ class AiAgentScript(
             scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
             config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
             config.model().isBlank() -> "Model is required"
+            config.maxSteps() <= 0 -> "Max steps per run must be > 0"
+            config.maxRunCost() <= 0 -> "Max \$ per run must be > 0"
+            config.maxTaskCost() <= 0 -> "Max \$ per task must be > 0"
             else -> null
         }
     }

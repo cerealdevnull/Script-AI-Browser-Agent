@@ -1,2 +1,1 @@
-rootProject.name = "Script template"
-
+rootProject.name = "ai-browser-agent"

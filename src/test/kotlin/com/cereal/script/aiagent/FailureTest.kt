@@ -1,0 +1,89 @@
+package com.cereal.script.aiagent
+
+import com.cereal.sdk.ExecutionResult
+import kotlinx.coroutines.runBlocking
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+/** Model failures, refusals, stuck detection and page-load errors, seen from the host. */
+class FailureTest {
+    private val site = FixtureServer()
+    private val host = Host()
+
+    @AfterTest
+    fun tearDown() = site.close()
+
+    private fun run(model: ModelClient, startUrl: String = site.url(), pageLoadTimeoutMs: Long = 60_000) =
+        runBlocking { host.run(AiAgentScript({ model }, tempProfiles(), pageLoadTimeoutMs), TestConfig(startUrl = startUrl)) }
+
+    private fun failingModel(e: ModelException) =
+        object : ModelClient {
+            override suspend fun send(request: ModelRequest): ModelTurn = throw e
+        }
+
+    @Test
+    fun `a rejected key ends the run with Error and a notification with the cost suffix`() {
+        val result = run(failingModel(ModelException("Model/API key rejected: HTTP 401: invalid x-api-key")))
+
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key", result.message)
+        assertEquals("Failed: Model/API key rejected: HTTP 401: invalid x-api-key\n0 steps, \$0.00", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a refusal ends the run with Model refused`() {
+        val model =
+            object : ModelClient {
+                override suspend fun send(request: ModelRequest) =
+                    ModelTurn(emptyList(), "refusal", ScriptedModel.MODEL, Usage(1000, 100), raw = null, text = "I can't help with that.")
+            }
+
+        val result = run(model)
+
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals("Model refused: I can't help with that.", result.message)
+        assertEquals("Failed: Model refused: I can't help with that.\n1 step, \$0.01", host.notifications.single().message)
+    }
+
+    @Test
+    fun `repeating the same action gets a nudge after 3, and ends as stuck after 3 more`() {
+        val addToCart: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Add to cart")}}""")) }
+        val model = ScriptedModel(*Array(7) { addToCart })
+
+        val result = run(model, startUrl = site.url("product.html"))
+
+        val nudge = "you are repeating the same action"
+        assertTrue(nudge !in model.requests[2].lastText, "no nudge after 2 repeats")
+        assertTrue(nudge in model.requests[3].lastText, model.requests[3].lastText)
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals("stuck: repeating the same action", result.message)
+        assertEquals(6, model.requests.size)
+        assertEquals("Failed: stuck: repeating the same action\n6 steps, \$0.04", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a page that never loads is a tool error first, then an Error when it repeats`() {
+        val navigate: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("navigate", """{"url": "${site.url("never-loads.html")}"}""")) }
+        val model =
+            ScriptedModel(
+                navigate,
+                {
+                    val result = (it.messages.last() as Message.ToolResults).results.single()
+                    assertTrue(result.isError)
+                    assertTrue("did not finish loading" in result.text, result.text)
+                    navigate(it)
+                },
+                navigate,
+            )
+
+        val result = run(model, pageLoadTimeoutMs = 1_500)
+
+        assertIs<ExecutionResult.Error>(result)
+        assertTrue(result.message.startsWith("Page load failed: "), result.message)
+        assertEquals(2, model.requests.size)
+        assertTrue(host.notifications.single().message.endsWith("\n2 steps, \$0.01"))
+    }
+}

@@ -6,6 +6,8 @@ import com.cereal.sdk.component.ComponentProvider
 import com.cereal.sdk.component.notification.Notification
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.net.URI
 import java.nio.file.Path
@@ -57,6 +59,7 @@ class AiAgentScript(
                 configuration.secrets(),
                 scrubber,
                 configuration.allowedDomainSet(),
+                { confirm(configuration, provider, scrubber, it) },
             )
         val cost = { "\n" + stepCount(agent.steps) + ", " + usd(agent.cost) }
         val outcome =
@@ -79,6 +82,7 @@ class AiAgentScript(
                 is Outcome.Failed -> "Failed: ${outcome.reason}"
                 is Outcome.Stopped -> "Stopped: ${outcome.reason}"
                 is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
+                is Outcome.Declined -> "Declined by user"
             }
         log.info("run: ${configuration.runMode()}, learned, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         return when (outcome) {
@@ -86,6 +90,10 @@ class AiAgentScript(
             is Outcome.Stopped -> {
                 notify(configuration, provider, verdict + cost())
                 ExecutionResult.Error(outcome.reason)
+            }
+            is Outcome.Declined -> {
+                notify(configuration, provider, verdict + cost())
+                ExecutionResult.Error("declined by user")
             }
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.joinToString("") { "${it.label}: ${it.text}\n" }
@@ -101,6 +109,31 @@ class AiAgentScript(
         val browser = browser ?: return
         this.browser = null
         withContext(NonCancellable) { browser.close() }
+    }
+
+    /** Notifies, then shows the Confirm / Decline dialog (no timeout). Closing it, or any dialog error, is a Decline. */
+    private suspend fun confirm(
+        config: AgentConfiguration,
+        provider: ComponentProvider,
+        scrubber: Scrubber,
+        step: Confirmation,
+    ): Boolean {
+        notify(config, provider, scrubber.forLog("Confirmation needed: ${step.action} on ${step.element}"))
+        fun row(label: String, value: String) = "<tr><th>$label</th><td>${escapeHtml(scrubber.forLog(value))}</td></tr>"
+        val html =
+            "<!doctype html><html><body style=\"font-family: sans-serif\"><h2>Confirm this step?</h2><table>" +
+                row("Action", step.action) + row("Element", step.element) + row("Page", step.url) +
+                row("Reason", step.reason ?: "(none given)") +
+                "</table><p><a href=\"$CONFIRM_URL\">Confirm</a> &nbsp; <a href=\"$DECLINE_URL\">Decline</a></p></body></html>"
+        return try {
+            provider.userInteraction().showHtml("AI agent: confirm step", html) { it.url == CONFIRM_URL || it.url == DECLINE_URL }.url == CONFIRM_URL
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // UserInteractionCanceledException (window closed) or a dialog failure. A stopped task also cancels the job.
+            currentCoroutineContext().ensureActive()
+            false
+        }
     }
 
     private suspend fun fail(
@@ -159,6 +192,12 @@ private fun modelClient(config: AgentConfiguration): ModelClient {
         Provider.OpenAICompatible -> OpenAiCompatibleClient(baseUrl ?: OpenAiCompatibleClient.DEFAULT_BASE_URL, config.apiKey()?.reveal(), model)
     }
 }
+private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
+private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
+
+private fun escapeHtml(s: String) =
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
+
 private val SECRET_NAME = Regex("[a-z][a-z0-9_]*")
 
 private fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"

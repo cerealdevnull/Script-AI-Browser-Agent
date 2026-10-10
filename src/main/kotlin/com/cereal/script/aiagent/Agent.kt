@@ -11,6 +11,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -40,7 +41,13 @@ sealed interface Outcome {
 
     /** A step or cost cap was hit. */
     class Stopped(val reason: String, override val steps: Int) : Outcome
+
+    /** The user declined (or closed) a confirmation. */
+    class Declined(override val steps: Int) : Outcome
 }
+
+/** An irreversible step waiting for the user's yes: [element] is the target's `role "name"`, [reason] the model's. */
+class Confirmation(val action: String, val element: String, val url: String, val reason: String?)
 
 /** [taskSpent]: what earlier runs of this task cost, counted against [maxTaskCost]. */
 class Caps(val maxSteps: Int, val maxRunCost: Double, val maxTaskCost: Double, val taskSpent: Double = 0.0)
@@ -58,7 +65,10 @@ class Agent(
     private val scrubber: Scrubber = Scrubber(null),
     /** The start URL's eTLD+1 plus the user's list; `navigate` and `type_secret` stay within them. */
     private val allowedDomains: Set<String> = setOfNotNull(hostOf(startUrl)?.let(::registrableDomain)),
+    /** Asks the user to confirm an irreversible step; false = declined. */
+    private val confirm: suspend (Confirmation) -> Boolean = { false },
 ) {
+    private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
     private val unpriced = mutableSetOf<String?>()
     var steps = 0
@@ -119,6 +129,8 @@ class Agent(
                         act(call)
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (e: DeclinedException) {
+                        return Outcome.Declined(steps)
                     } catch (e: Exception) {
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     }
@@ -191,11 +203,13 @@ class Agent(
                 "read_page" -> pageResult("ok")
                 "click" -> {
                     val ref = args.int("ref")
+                    confirmIfIrreversible(call, ref, null)
                     browser.click(ref)
                     pageResult("ok: clicked [$ref]")
                 }
                 "type" -> {
                     val ref = refusingAccountSettings(args.int("ref"))
+                    confirmIfIrreversible(call, ref, args.str("text"))
                     browser.type(ref, args.str("text"))
                     pageResult("ok: typed into [$ref]")
                 }
@@ -207,6 +221,7 @@ class Agent(
                     require(browser.isTextInput(ref)) { "[$ref] is not an editable text input" }
                     require(isAllowedHost(hostOf(browser.url()), allowedDomains)) { "never allowed: typing a secret on a page that is not on an allowed domain" }
                     browser.type(ref, scrubber.reveal(name, secret))
+                    irreversible.secretTyped(ref)
                     pageResult("ok: typed secret '$name' into [$ref]")
                 }
                 "select" -> {
@@ -248,6 +263,19 @@ class Agent(
             }
         return ToolResult(call.id, text)
     }
+
+    /** Asks the user before an irreversible click/type; throws [DeclinedException] on no. */
+    private suspend fun confirmIfIrreversible(call: ToolCall, ref: Int, text: String?) {
+        val modelFlag = (call.args["irreversible"] as? JsonPrimitive)?.booleanOrNull == true
+        if (!irreversible.heuristic(call.name, ref, text)) {
+            if (!modelFlag) return
+            if (irreversible.signInSubmit(call.name, ref, text)) return log("model flag cleared: sign-in submit")
+        }
+        val reason = (call.args["reason"] as? JsonPrimitive)?.contentOrNull
+        if (!confirm(Confirmation(call.name, browser.describe(ref), browser.url(), reason))) throw DeclinedException()
+    }
+
+    private class DeclinedException : Exception("declined by user")
 
     /** Never-do: no typing into password, email or card fields on an account-settings page. */
     private suspend fun refusingAccountSettings(ref: Int): Int {
@@ -293,11 +321,30 @@ class Agent(
         private const val ONCE_MODE =
             "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found."
 
+        private const val IRREVERSIBLE_ARGS =
+            " irreversible: true when this step buys, pays, orders, deletes, sends or otherwise can't be undone (the user is asked to " +
+                "confirm first); reason: why, shown to the user; both may be null. Signing in, searching, filtering, navigating and " +
+                "adding to a cart are not irreversible."
+
+        private val IRREVERSIBLE_PROPS = arrayOf<Pair<String, Any>>("irreversible" to nullable("boolean"), "reason" to nullable("string"))
+
+        private fun nullable(type: String) =
+            buildJsonObject {
+                putJsonArray("type") {
+                    add(JsonPrimitive(type))
+                    add(JsonPrimitive("null"))
+                }
+            }
+
         val TOOLS =
             listOf(
                 ToolDef("read_page", "Re-read the current page as an accessibility snapshot with [ref]s.", schema()),
-                ToolDef("click", "Click the element with this ref.", schema("ref" to "integer")),
-                ToolDef("type", "Clear the field with this ref and type text into it.", schema("ref" to "integer", "text" to "string")),
+                ToolDef("click", "Click the element with this ref.$IRREVERSIBLE_ARGS", schema("ref" to "integer", *IRREVERSIBLE_PROPS)),
+                ToolDef(
+                    "type",
+                    "Clear the field with this ref and type text into it.$IRREVERSIBLE_ARGS",
+                    schema("ref" to "integer", "text" to "string", *IRREVERSIBLE_PROPS),
+                ),
                 ToolDef(
                     "type_secret",
                     "Clear the text input with this ref and type the user's secret named field into it. You never see the value; " +

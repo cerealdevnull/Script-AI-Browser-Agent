@@ -9,10 +9,14 @@ import java.net.InetSocketAddress
  */
 class FixtureServer : AutoCloseable {
     val pages = mutableMapOf<String, String>()
+
+    /** Every path requested so far, e.g. `/order.html`. */
+    val requested: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
 
     init {
         server.createContext("/") { exchange ->
+            requested += exchange.requestURI.path
             val path = exchange.requestURI.path.removePrefix("/").ifEmpty { "index.html" }
             val body = (pages[path] ?: javaClass.getResource("/fixtures/$path")?.readText())?.toByteArray()
             exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")

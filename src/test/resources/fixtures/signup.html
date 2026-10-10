@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><title>Toolshop - Sign up</title></head>
+<body>
+<h1>Sign up</h1>
+<form id="signup">
+  <label>Email address <input type="email" id="email"></label>
+  <label>Password <input type="password" id="password"></label>
+  <label>Repeat password <input type="password" id="password2"></label>
+  <button type="submit">Create account</button>
+</form>
+<p id="status"></p>
+<script>
+  document.getElementById('signup').addEventListener('submit', e => {
+    e.preventDefault();
+    document.getElementById('status').textContent = 'Account created';
+  });
+</script>
+</body>
+</html>

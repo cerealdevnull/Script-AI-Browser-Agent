@@ -95,6 +95,7 @@ class SafetyTest {
 
     @Test
     fun `a page redirect off-domain is followed, but type_secret is refused there`() {
+        host.dialogAnswers += confirmClicked // an off-domain type asks first
         val model =
             ScriptedModel(
                 {
@@ -115,6 +116,7 @@ class SafetyTest {
         run(model, "redirect.html")
 
         assertEquals(2, model.requests.size)
+        assertEquals(1, host.dialogs.size)
     }
 
     @Test

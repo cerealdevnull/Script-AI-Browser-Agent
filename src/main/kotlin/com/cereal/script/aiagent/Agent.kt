@@ -36,7 +36,11 @@ sealed interface Outcome {
         val verified: Boolean = true,
     ) : Outcome
 
-    class Failed(val reason: String, override val steps: Int) : Outcome
+    /**
+     * [transient]: a page load, network or model 429/5xx failure that outlasted its retries; a later attempt may work.
+     * Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
+     */
+    class Failed(val reason: String, override val steps: Int, val transient: Boolean = false) : Outcome
 
     /** A step or cost cap was hit. */
     class Stopped(val reason: String, override val steps: Int) : Outcome
@@ -66,19 +70,32 @@ class Agent(
     var cost = 0.0
         private set
     private var finishRejections = 0
+    private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
+    private var loadFailure: String? = null // tool + args of the last action whose page didn't load
 
     suspend fun run(): Outcome {
-        browser.navigate(startUrl)
+        val current =
+            try {
+                browser.navigate(startUrl)
+                "Current page:"
+            } catch (e: PageLoadException) {
+                loadFailure = "navigate" + JsonObject(mapOf("url" to JsonPrimitive(startUrl)))
+                "Current page (error: ${e.message}):"
+            }
         messages +=
             Message.User(
-                scrubber.forModel(
-                    "Goal: $goal\n$ONCE_MODE\nStart page: $startUrl\n" + secretsNote() + "\n" + pageResult("Current page:"),
-                ),
+                scrubber.forModel("Goal: $goal\n$ONCE_MODE\nStart page: $startUrl\n" + secretsNote() + "\n" + pageResult(current)),
             )
         while (true) {
             capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
+            // Retries and rate-limit waits happen inside send(): they are not steps.
+            val turn =
+                try {
+                    model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList()))
+                } catch (e: ModelException) {
+                    return Outcome.Failed(e.message!!, steps, e.transient)
+                }
             steps++
-            val turn = model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList()))
             messages += Message.Assistant(turn)
             val stepCost =
                 Prices.cost(turn.model, turn.usage) ?: 0.0.also {
@@ -90,6 +107,7 @@ class Agent(
                 "step $steps: ${turn.toolCalls.map { describe(it) }.joinToString().ifEmpty { "no tool call" }} " +
                     "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
+            if (turn.stopReason == "refusal") return Outcome.Failed("Model refused: ${turn.text ?: "no reason given"}", steps)
             if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
 
             val results = mutableListOf<ToolResult>()
@@ -112,14 +130,22 @@ class Agent(
                     }
                     "fail" -> return Outcome.Failed(call.args.str("reason"), steps)
                 }
-                results +=
+                val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
+                if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
+                val result =
                     try {
-                        ToolResult(call.id, act(call))
+                        ToolResult(call.id, act(call)).also { loadFailure = null }
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (e: PageLoadException) {
+                        val key = call.name + call.args
+                        if (key == loadFailure) return Outcome.Failed("Page load failed: ${e.message}", steps, transient = true)
+                        loadFailure = key
+                        ToolResult(call.id, "error: ${e.message}", isError = true)
                     } catch (e: Exception) {
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     }
+                results += if (seen == STUCK_REPEATS) ToolResult(call.id, "$REPEATING\n${result.text}", isError = true) else result
             }
             messages += Message.ToolResults(results.map { ToolResult(it.callId, scrubber.forModel(it.text), it.isError) })
         }
@@ -132,6 +158,22 @@ class Agent(
             caps.taskSpent + cost >= caps.maxTaskCost -> "max \$ per task (${usd(caps.maxTaskCost)})"
             else -> null
         }
+
+    /** What makes two actions "the same" for stuck detection: page, tool, target (by fingerprint, not ref) and args. */
+    private suspend fun actionKey(call: ToolCall): String {
+        val ref = (call.args["ref"] as? JsonPrimitive)?.intOrNull
+        val target =
+            ref?.let {
+                try {
+                    browser.fingerprint(it.toString()).json
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "ref $it"
+                }
+            }
+        return listOf(browser.url(), call.name, target, JsonObject(call.args - "ref")).joinToString("\n")
+    }
 
     /** Tool and target for the step log, e.g. `click link "Pliers"`. */
     private suspend fun describe(call: ToolCall): String {
@@ -220,6 +262,10 @@ class Agent(
 
     companion object {
         private const val MAX_FINISH_RETRIES = 2
+        private const val STUCK_REPEATS = 3
+        private const val REPEATING =
+            "error: you are repeating the same action ($STUCK_REPEATS times on this page, same target and arguments). " +
+                "If the information isn't on the page, call fail."
         private val WHITESPACE = Regex("\\s+")
         private val TEXT_REF = Regex("t\\d+")
 

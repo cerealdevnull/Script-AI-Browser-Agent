@@ -1,6 +1,7 @@
 package com.cereal.script.aiagent
 
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -16,7 +17,12 @@ import kotlinx.serialization.json.putJsonObject
  * Chat Completions (not the Responses API) for OpenAI, OpenRouter, Gemini's OpenAI endpoint, Ollama and LM Studio.
  * The API key is optional (local servers) and goes only to [baseUrl], in the auth header.
  */
-class OpenAiCompatibleClient(private val baseUrl: String, private val apiKey: String?, private val model: String) : ModelClient {
+class OpenAiCompatibleClient(
+    private val baseUrl: String,
+    private val apiKey: String?,
+    private val model: String,
+    private val sleep: suspend (Long) -> Unit = { delay(it) },
+) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {
         val body =
             buildJsonObject {
@@ -43,9 +49,9 @@ class OpenAiCompatibleClient(private val baseUrl: String, private val apiKey: St
                 put("messages", JsonArray(toJson(request)))
             }
         val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
-        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body)
-        val choice = json["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: throw ModelException("no choices in response")
-        val message = choice["message"] as? JsonObject ?: throw ModelException("no message in response")
+        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body, sleep)
+        val choice = json["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: throw ModelException("Model error: no choices in response")
+        val message = choice["message"] as? JsonObject ?: throw ModelException("Model error: no message in response")
         val usage = json["usage"] as? JsonObject
         fun JsonObject?.long(key: String) = (this?.get(key) as? JsonPrimitive)?.longOrNull ?: 0L
         val prompt = usage.long("prompt_tokens")
@@ -61,11 +67,12 @@ class OpenAiCompatibleClient(private val baseUrl: String, private val apiKey: St
                     val parsed = runCatching { Json.parseToJsonElement(args) as JsonObject }.getOrNull()
                     ToolCall(it.str("id")!!, function.str("name")!!, parsed ?: JsonObject(mapOf("unparseable_arguments" to JsonPrimitive(args))))
                 },
-            stopReason = choice.str("finish_reason"),
+            // A refusal comes as finish_reason "stop" with a refusal message; the agent knows Anthropic's "refusal".
+            stopReason = if (message.str("refusal") != null) "refusal" else choice.str("finish_reason"),
             model = json.str("model"),
             usage = Usage(prompt - cached, output, cacheRead = cached),
             raw = message,
-            text = message.str("content"),
+            text = message.str("content") ?: message.str("refusal"),
         )
     }
 

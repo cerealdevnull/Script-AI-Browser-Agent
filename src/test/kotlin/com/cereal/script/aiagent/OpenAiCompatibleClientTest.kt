@@ -134,14 +134,53 @@ class OpenAiCompatibleClientTest {
         }
 
     @Test
-    fun `an API error becomes a ModelException with the status and message`() {
-        api.enqueue(MockResponse.Builder().code(401).body("""{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}""").build())
+    fun `an invalid-model 400 fails at once with the rejected message`() {
+        api.enqueue(MockResponse.Builder().code(400).body("""{"error":{"message":"The model `gpt-9` does not exist","type":"invalid_request_error"}}""").build())
 
         val e =
             assertFailsWith<ModelException> {
-                runBlocking { OpenAiCompatibleClient(baseUrl, "sk-bad", "gpt-5").send(request(Message.User("Goal: x"))) }
+                runBlocking { OpenAiCompatibleClient(baseUrl, "sk-test", "gpt-9").send(request(Message.User("Goal: x"))) }
             }
 
-        assertEquals("HTTP 401: Incorrect API key provided", e.message)
+        assertEquals("Model/API key rejected: HTTP 400: The model `gpt-9` does not exist", e.message)
+        assertEquals(1, api.requestCount)
     }
+
+    @Test
+    fun `a Gemini 429 waits the RetryInfo retryDelay`() =
+        runBlocking {
+            val sleeps = mutableListOf<Long>()
+            api.enqueue(
+                MockResponse.Builder().code(429).body(
+                    """
+                    [{"error":{"code":429,"message":"Resource exhausted","status":"RESOURCE_EXHAUSTED",
+                      "details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"12.5s"}]}}]
+                    """.trimIndent(),
+                ).build(),
+            )
+            api.enqueue(MockResponse.Builder().body(toolCallResponse).build())
+
+            OpenAiCompatibleClient(baseUrl, "key", "gemini-3-flash") { sleeps += it }.send(request(Message.User("Goal: x")))
+
+            assertEquals(listOf(12_500L), sleeps)
+        }
+
+    @Test
+    fun `a refusal maps to the refusal stop reason with its text`() =
+        runBlocking {
+            api.enqueue(
+                MockResponse.Builder().body(
+                    """
+                    {"model":"gpt-5","choices":[{"index":0,"finish_reason":"stop",
+                      "message":{"role":"assistant","content":null,"refusal":"I can't help with that."}}],
+                     "usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+                    """.trimIndent(),
+                ).build(),
+            )
+
+            val turn = OpenAiCompatibleClient(baseUrl, "sk-test", "gpt-5").send(request(Message.User("Goal: x")))
+
+            assertEquals("refusal", turn.stopReason)
+            assertEquals("I can't help with that.", turn.text)
+        }
 }

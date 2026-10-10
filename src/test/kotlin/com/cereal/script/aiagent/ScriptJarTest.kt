@@ -49,6 +49,7 @@ class ScriptJarTest {
         val functions = configClass.kotlin.memberFunctions.associateBy { it.name }
         assertTrue(functions.getValue("baseUrl").returnType.isMarkedNullable)
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
+        assertTrue(functions.getValue("secret3Value").returnType.isMarkedNullable)
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->

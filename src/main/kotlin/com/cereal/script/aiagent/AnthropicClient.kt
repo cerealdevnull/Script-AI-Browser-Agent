@@ -1,5 +1,6 @@
 package com.cereal.script.aiagent
 
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -12,7 +13,12 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 /** Anthropic Messages API over raw OkHttp (vendor SDKs don't load in the host's ScriptClassLoader). */
-class AnthropicClient(private val baseUrl: String, private val apiKey: String, private val model: String) : ModelClient {
+class AnthropicClient(
+    private val baseUrl: String,
+    private val apiKey: String,
+    private val model: String,
+    private val sleep: suspend (Long) -> Unit = { delay(it) },
+) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {
         val body =
             buildJsonObject {
@@ -46,6 +52,7 @@ class AnthropicClient(private val baseUrl: String, private val apiKey: String, p
                 "${baseUrl.trimEnd('/')}/v1/messages",
                 mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01", "anthropic-beta" to "server-side-fallback-2026-07-01"),
                 body,
+                sleep,
             )
         val content = json["content"]?.jsonArray ?: JsonArray(emptyList())
         val blocks = content.map { it.jsonObject }

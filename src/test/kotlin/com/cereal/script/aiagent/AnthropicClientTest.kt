@@ -19,7 +19,8 @@ import kotlin.test.assertTrue
 /** Edge contract: the Anthropic Messages adapter against a fake API server. */
 class AnthropicClientTest {
     private val api = MockWebServer().apply { start() }
-    private val client = AnthropicClient(api.url("/").toString().removeSuffix("/"), "sk-test", "claude-opus-5-5")
+    private val sleeps = mutableListOf<Long>()
+    private val client = AnthropicClient(api.url("/").toString().removeSuffix("/"), "sk-test", "claude-opus-5-5") { sleeps += it }
 
     @AfterTest
     fun tearDown() = api.close()
@@ -133,7 +134,7 @@ class AnthropicClientTest {
         }
 
     @Test
-    fun `an API error becomes a ModelException with the status and message`() {
+    fun `an auth error fails at once with the rejected message`() {
         api.enqueue(
             MockResponse.Builder().code(401)
                 .body("""{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}""").build(),
@@ -141,6 +142,45 @@ class AnthropicClientTest {
 
         val e = assertFailsWith<ModelException> { runBlocking { client.send(request(Message.User("Goal: x"))) } }
 
-        assertEquals("HTTP 401: invalid x-api-key", e.message)
+        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key", e.message)
+        assertFalse(e.transient)
+        assertEquals(1, api.requestCount)
     }
+
+    @Test
+    fun `a 429 waits the retry-after delay and retries`() =
+        runBlocking {
+            api.enqueue(MockResponse.Builder().code(429).addHeader("retry-after", "7").body("""{"error":{"message":"rate limited"}}""").build())
+            api.enqueue(MockResponse.Builder().body(toolUseResponse).build())
+
+            val turn = client.send(request(Message.User("Goal: x")))
+
+            assertEquals("click", turn.toolCalls.single().name)
+            assertEquals(listOf(7_000L), sleeps)
+        }
+
+    @Test
+    fun `the 4th consecutive 429 fails the call as transient`() {
+        repeat(4) { api.enqueue(MockResponse.Builder().code(429).body("""{"error":{"message":"rate limited"}}""").build()) }
+
+        val e = assertFailsWith<ModelException> { runBlocking { client.send(request(Message.User("Goal: x"))) } }
+
+        assertEquals("Model error: HTTP 429: rate limited", e.message)
+        assertTrue(e.transient)
+        assertEquals(4, api.requestCount)
+        assertEquals(listOf(1_000L, 2_000L, 4_000L), sleeps)
+    }
+
+    @Test
+    fun `5xx and overloaded responses are retried with exponential backoff`() =
+        runBlocking {
+            api.enqueue(MockResponse.Builder().code(500).body("""{"error":{"message":"internal"}}""").build())
+            api.enqueue(MockResponse.Builder().code(529).body("""{"error":{"type":"overloaded_error","message":"Overloaded"}}""").build())
+            api.enqueue(MockResponse.Builder().body(toolUseResponse).build())
+
+            client.send(request(Message.User("Goal: x")))
+
+            assertEquals(listOf(1_000L, 2_000L), sleeps)
+            assertEquals(3, api.requestCount)
+        }
 }

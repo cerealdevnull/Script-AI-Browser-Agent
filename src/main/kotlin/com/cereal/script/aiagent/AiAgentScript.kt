@@ -14,6 +14,7 @@ import java.security.MessageDigest
 class AiAgentScript(
     private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
+    private val pageLoadTimeoutMs: Long = 60_000,
 ) : Script<AgentConfiguration> {
     private var configError: String? = null
     private var browser: Browser? = null
@@ -38,11 +39,11 @@ class AiAgentScript(
         val log = provider.logger()
         val browser =
             browser ?: try {
-                Browser.launch(profilesDir.resolve(profileName(configuration))).also { browser = it }
+                Browser.launch(profilesDir.resolve(profileName(configuration)), pageLoadTimeoutMs).also { browser = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                return fail(configuration, provider, "Chrome could not be started: ${e.message}")
+                return fail(configuration, provider, "Chrome could not be started: ${e.message}", "\n${stepCount(0)}, ${usd(0.0)}")
             }
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
@@ -61,8 +62,6 @@ class AiAgentScript(
         val outcome =
             try {
                 agent.run()
-            } catch (e: ModelException) {
-                return fail(configuration, provider, scrubber.forLog("Model error: ${e.message}"), cost())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -81,7 +80,7 @@ class AiAgentScript(
             }
         log.info("run: ${configuration.runMode()}, learned, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         return when (outcome) {
-            is Outcome.Failed -> fail(configuration, provider, outcome.reason, cost())
+            is Outcome.Failed -> fail(configuration, provider, scrubber.forLog(outcome.reason), cost())
             is Outcome.Stopped -> {
                 notify(configuration, provider, verdict + cost())
                 ExecutionResult.Error(outcome.reason)

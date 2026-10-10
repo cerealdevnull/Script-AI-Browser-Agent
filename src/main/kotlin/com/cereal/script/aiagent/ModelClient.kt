@@ -40,4 +40,8 @@ class ModelTurn(
 
 class Usage(val input: Long, val output: Long, val cacheRead: Long = 0, val cacheWrite: Long = 0)
 
-class ModelException(message: String) : Exception(message)
+/**
+ * A model API or network failure; [message] is the user-facing reason. [transient]: a 429, 5xx or network error that
+ * outlasted its retries, so a later attempt may work. Non-transient: rejected key/model or another 4xx.
+ */
+class ModelException(message: String, val transient: Boolean = false) : Exception(message)

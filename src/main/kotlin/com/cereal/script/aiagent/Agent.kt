@@ -1,5 +1,6 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,6 +32,8 @@ class Agent(
     private val goal: String,
     private val startUrl: String,
     private val log: (String) -> Unit,
+    private val secrets: Map<String, Secret> = emptyMap(),
+    private val scrubber: Scrubber = Scrubber(null),
 ) {
     private val messages = mutableListOf<Message>()
     private var steps = 0
@@ -39,7 +42,9 @@ class Agent(
         browser.navigate(startUrl)
         messages +=
             Message.User(
-                "Goal: $goal\n$ONCE_MODE\nStart page: $startUrl\n\n" + pageResult("Current page:"),
+                scrubber.forModel(
+                    "Goal: $goal\n$ONCE_MODE\nStart page: $startUrl\n" + secretsNote() + "\n" + pageResult("Current page:"),
+                ),
             )
         while (true) {
             if (steps >= MAX_STEPS) return Outcome.Failed("Step limit reached: $MAX_STEPS steps", steps)
@@ -72,7 +77,7 @@ class Agent(
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     }
             }
-            messages += Message.ToolResults(results)
+            messages += Message.ToolResults(results.map { ToolResult(it.callId, scrubber.forModel(it.text), it.isError) })
         }
     }
 
@@ -91,6 +96,15 @@ class Agent(
                 browser.type(args.int("ref"), args.str("text"))
                 pageResult("ok: typed into $target")
             }
+            "type_secret" -> {
+                val ref = args.int("ref")
+                val name = args.str("field")
+                val secret = secrets[name] ?: throw IllegalArgumentException("unknown secret '$name'; available: ${secrets.keys.joinToString()}")
+                val target = browser.describe(ref)
+                require(browser.isTextInput(ref)) { "$target is not an editable text input" }
+                browser.type(ref, scrubber.reveal(name, secret))
+                pageResult("ok: typed secret '$name' into $target")
+            }
             "navigate" -> {
                 val url = args.str("url")
                 val scheme = runCatching { URI(url).scheme?.lowercase() }.getOrNull()
@@ -101,6 +115,9 @@ class Agent(
             else -> error("unknown tool ${call.name}")
         }
     }
+
+    private fun secretsNote() =
+        if (secrets.isEmpty()) "" else "Secrets you can type with type_secret (by name): ${secrets.keys.joinToString()}\n"
 
     private suspend fun pageResult(prefix: String) =
         "$prefix\nurl: ${browser.url()}\n<page_content>\n${browser.snapshot()}</page_content>"
@@ -128,6 +145,12 @@ class Agent(
                 ToolDef("read_page", "Re-read the current page as an accessibility snapshot with [ref]s.", schema()),
                 ToolDef("click", "Click the element with this ref.", schema("ref" to "integer")),
                 ToolDef("type", "Clear the field with this ref and type text into it.", schema("ref" to "integer", "text" to "string")),
+                ToolDef(
+                    "type_secret",
+                    "Clear the text input with this ref and type the user's secret named field into it. You never see the value; " +
+                        "it shows as {{secret:name}} in snapshots.",
+                    schema("ref" to "integer", "field" to "string"),
+                ),
                 ToolDef("navigate", "Open an http(s) URL in the tab.", schema("url" to "string")),
                 ToolDef(
                     "finish",

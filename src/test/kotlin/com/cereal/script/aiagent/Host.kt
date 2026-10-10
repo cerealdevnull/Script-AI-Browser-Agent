@@ -78,6 +78,8 @@ class TestConfig(
     val maxSteps: Int = 40,
     val maxRunCost: Double = 3.0,
     val maxTaskCost: Double = 10.0,
+    val provider: Provider = Provider.Anthropic,
+    val model: String = "claude-opus-5-5",
 ) : AgentConfiguration {
     override fun goal() = goal
     override fun startUrl() = startUrl
@@ -86,6 +88,8 @@ class TestConfig(
     override fun maxSteps() = maxSteps
     override fun maxRunCost() = maxRunCost
     override fun maxTaskCost() = maxTaskCost
+    override fun provider() = provider
+    override fun model() = model
 }
 
 fun tempProfiles(): Path = Files.createTempDirectory("ai-agent-profiles")

@@ -27,11 +27,15 @@ class AiAgentScript(
     // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
     private var scrubber: Scrubber? = null
 
+    // Repeat: consecutive iterations that failed transiently (page load, network, model 429/5xx after retries).
+    private var transientFailures = 0
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
         scrubber = null
+        transientFailures = 0
         if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
@@ -102,6 +106,12 @@ class AiAgentScript(
                 is Outcome.Declined -> "Declined by user"
             }
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
+        // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
+        transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
+        if (repeat && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
+            log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
+            return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
+        }
         return when (outcome) {
             is Outcome.Failed -> fail(configuration, provider, scrubber.forLog(outcome.reason), cost())
             is Outcome.Stopped -> {
@@ -232,6 +242,7 @@ private fun modelClient(config: AgentConfiguration): ModelClient {
         Provider.OpenAICompatible -> OpenAiCompatibleClient(baseUrl ?: OpenAiCompatibleClient.DEFAULT_BASE_URL, config.apiKey()?.reveal(), model)
     }
 }
+private const val MAX_TRANSIENT_FAILURES = 3
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
 

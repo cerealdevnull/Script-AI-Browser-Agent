@@ -34,7 +34,7 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 3,
         keyName = "provider",
         name = "Provider",
-        description = "Who runs the model. Your API key is sent only to this provider.",
+        description = "Anthropic, or any OpenAI-compatible server (OpenAI, OpenRouter, Gemini, Ollama, LM Studio). Your API key is sent only to the base URL.",
     )
     fun provider(): Provider = Provider.Anthropic
 
@@ -42,7 +42,10 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 4,
         keyName = "baseUrl",
         name = "Base URL",
-        description = "Leave empty for the provider's default API address.",
+        description =
+            "Leave empty for the provider's default (Anthropic: https://api.anthropic.com, OpenAI-compatible: https://api.openai.com/v1). " +
+                "E.g. https://openrouter.ai/api/v1, https://generativelanguage.googleapis.com/v1beta/openai, " +
+                "http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio).",
     )
     fun baseUrl(): String?
 
@@ -50,7 +53,7 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 5,
         keyName = "apiKey",
         name = "API key",
-        description = "Your own API key for the provider.",
+        description = "Your own API key for the provider. Required for Anthropic; optional for OpenAI-compatible (local servers).",
     )
     fun apiKey(): Secret?
 
@@ -65,4 +68,4 @@ interface AgentConfiguration : ScriptConfiguration {
 
 enum class RunMode { Once }
 
-enum class Provider { Anthropic }
+enum class Provider { Anthropic, OpenAICompatible }

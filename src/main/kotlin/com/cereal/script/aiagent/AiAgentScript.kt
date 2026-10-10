@@ -12,9 +12,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 
 class AiAgentScript(
-    private val newModelClient: (AgentConfiguration) -> ModelClient = {
-        AnthropicClient(it.baseUrl()?.takeIf(String::isNotBlank) ?: AnthropicClient.DEFAULT_BASE_URL, it.apiKey()!!.reveal(), it.model())
-    },
+    private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
 ) : Script<AgentConfiguration> {
     private var configError: String? = null
@@ -91,7 +89,7 @@ class AiAgentScript(
             config.goal().isBlank() -> "Goal is required"
             config.startUrl().isBlank() -> "Start URL is required"
             scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
-            config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
+            config.provider() == Provider.Anthropic && config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
             config.model().isBlank() -> "Model is required"
             else -> null
         }
@@ -104,6 +102,15 @@ class AiAgentScript(
             .digest("${config.goal()}\n${config.startUrl().trim()}".toByteArray())
             .joinToString("") { "%02x".format(it) }
             .take(16)
+}
+
+private fun modelClient(config: AgentConfiguration): ModelClient {
+    val baseUrl = config.baseUrl()?.trim()?.takeIf(String::isNotEmpty)
+    val model = config.model().trim()
+    return when (config.provider()) {
+        Provider.Anthropic -> AnthropicClient(baseUrl ?: AnthropicClient.DEFAULT_BASE_URL, config.apiKey()!!.reveal(), model)
+        Provider.OpenAICompatible -> OpenAiCompatibleClient(baseUrl ?: OpenAiCompatibleClient.DEFAULT_BASE_URL, config.apiKey()?.reveal(), model)
+    }
 }
 
 private fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"

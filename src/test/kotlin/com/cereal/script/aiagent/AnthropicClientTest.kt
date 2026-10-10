@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -12,6 +13,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /** Edge contract: the Anthropic Messages adapter against a fake API server. */
@@ -89,6 +91,28 @@ class AnthropicClientTest {
                 ),
                 body["messages"],
             )
+        }
+
+    @Test
+    fun `history is append-only, old snapshots are not trimmed, and the API key stays out of the body`() =
+        runBlocking {
+            repeat(4) { api.enqueue(MockResponse.Builder().body(toolUseResponse).build()) }
+            val messages = mutableListOf<Message>(Message.User("Goal: x"))
+            repeat(3) { i ->
+                messages += Message.Assistant(client.send(request(*messages.toTypedArray())))
+                messages += Message.ToolResults(listOf(ToolResult("toolu_1", "ok: step $i\n<page_content>\nsnapshot $i</page_content>")))
+            }
+            repeat(3) { api.takeRequest() }
+
+            client.send(request(*messages.toTypedArray()))
+
+            val bodyText = api.takeRequest().body!!.utf8()
+            assertFalse("sk-test" in bodyText, "the API key goes only in the auth header")
+            val results =
+                Json.parseToJsonElement(bodyText).jsonObject["messages"]!!.jsonArray.map { it.jsonObject }
+                    .filter { it["role"]!!.jsonPrimitive.content == "user" }
+                    .mapNotNull { (it["content"] as? JsonArray)?.single()?.jsonObject?.get("content")?.jsonPrimitive?.content }
+            assertEquals((0..2).map { "ok: step $it\n<page_content>\nsnapshot $it</page_content>" }, results)
         }
 
     @Test

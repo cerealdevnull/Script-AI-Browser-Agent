@@ -75,7 +75,7 @@ class ScriptJarTest {
                 runBlocking { runner.run(config, host) }
 
                 assertEquals(ScriptStatus.Success, runner.status)
-                assertEquals("Goal met\nLong Nose Pliers is in stock.\n2 steps", host.notifications.single().message)
+                assertEquals("Goal met\nLong Nose Pliers is in stock.\n2 steps, $0.00", host.notifications.single().message)
             }
         }
     }

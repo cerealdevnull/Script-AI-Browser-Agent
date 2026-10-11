@@ -4,6 +4,7 @@
 - **repeat run**: a goal run that comes back on a later `Loop` iteration or after a restart.
 - **provider**: who runs the model the agent calls: a named preset (Anthropic, Google Gemini, OpenAI, OpenRouter) or Custom (any OpenAI-compatible server).
 - **recommended model**: the model a preset uses when the user leaves Model empty; Custom has none.
+- **pre-flight check**: the free lookup of the key and model at the provider, once per task start, before Chrome opens.
 - **run mode**: Once (reach the goal, notify the result) or Repeat (monitor until the goal's condition holds).
 - **step**: one LLM call. Replayed actions are not steps.
 - **snapshot**: the page as an accessibility tree sent to the model, inside a `<page_content>` block.

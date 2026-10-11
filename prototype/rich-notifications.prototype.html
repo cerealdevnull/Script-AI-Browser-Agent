@@ -1,0 +1,176 @@
+<!doctype html>
+<!-- PROTOTYPE, throwaway. Question: what should a result notification look like on Discord and Telegram?
+     Four variants (?variant=A..D) x six outcomes (?outcome=...). Open the file in a browser; ← → switch variants. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rich notifications prototype</title>
+<style>
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #e9e9ee; color: #111; padding: 16px 16px 90px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .note { color: #555; max-width: 1100px; margin: 0 0 12px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .tabs button { border: 1px solid #bbb; background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  .tabs button.on { background: #111; color: #fff; border-color: #111; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; max-width: 1400px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #666; margin: 0 0 6px; }
+  .feas { font-size: 12px; margin-top: 6px; color: #555; }
+  .feas b.ok { color: #1a7f37; } .feas b.no { color: #b42318; }
+
+  /* Discord */
+  .dc { background: #313338; color: #dbdee1; border-radius: 8px; padding: 14px; font-family: "gg sans", system-ui, sans-serif; }
+  .dc .who { display: flex; gap: 10px; }
+  .dc .av { width: 40px; height: 40px; border-radius: 50%; background: #5865f2; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; }
+  .dc .name { color: #fff; font-weight: 600; } .dc .bot { background: #5865f2; color: #fff; font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; }
+  .dc .time { color: #949ba4; font-size: 12px; margin-left: 6px; }
+  .dc .content { white-space: pre-wrap; margin-top: 2px; }
+  .embed { margin-top: 6px; background: #2b2d31; border-left: 4px solid #888; border-radius: 4px; padding: 10px 14px 12px; display: grid; grid-template-columns: 1fr auto; gap: 0 14px; max-width: 460px; }
+  .embed .t { color: #00a8fc; font-weight: 600; } .embed .t.plain { color: #fff; }
+  .embed .d { white-space: pre-wrap; margin-top: 4px; font-size: 13.5px; }
+  .embed .fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; grid-column: 1 / -1; }
+  .embed .f.wide { grid-column: 1 / -1; }
+  .embed .fn { font-weight: 600; font-size: 13px; color: #fff; } .embed .fv { font-size: 13.5px; }
+  .embed .big { font-size: 22px; font-weight: 700; color: #fff; }
+  .embed .thumb { width: 80px; height: 80px; border-radius: 4px; grid-row: 1 / 3; grid-column: 2; }
+  .embed .img { grid-column: 1 / -1; margin-top: 10px; border-radius: 4px; height: 170px; }
+  .embed .foot { grid-column: 1 / -1; color: #949ba4; font-size: 12px; margin-top: 8px; }
+
+  /* Telegram */
+  .tg { background: #8eb48a url() ; background: linear-gradient(#a7c79c, #7fa58a); border-radius: 8px; padding: 14px; }
+  .bubble { background: #fff; border-radius: 10px 10px 10px 2px; padding: 7px 10px 6px; max-width: 360px; white-space: pre-wrap; font-size: 14.5px; box-shadow: 0 1px 1px rgba(0,0,0,.15); }
+  .bubble a { color: #168acd; text-decoration: none; }
+  .bubble .meta { text-align: right; color: #8a9aa8; font-size: 11px; }
+  .preview { border-left: 3px solid #168acd; padding: 2px 8px; margin: 6px 0 2px; white-space: normal; }
+  .preview .site { color: #168acd; font-weight: 600; font-size: 13px; } .preview .ptitle { font-weight: 600; font-size: 13px; }
+  .preview .pimg { height: 130px; border-radius: 6px; margin-top: 6px; }
+  .tg .from { font-size: 12px; color: #fff; margin-bottom: 4px; font-weight: 600; }
+
+  /* Desktop toast + email */
+  .toast { background: rgba(246,246,246,.96); border-radius: 12px; padding: 10px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18); display: flex; gap: 10px; max-width: 360px; }
+  .toast .ic { width: 32px; height: 32px; border-radius: 8px; background: #f5a623; flex: none; }
+  .toast .tt { font-weight: 600; font-size: 13px; } .toast .tb { font-size: 13px; white-space: pre-wrap; color: #333; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .mail { background: #fff; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; }
+
+  .shoe { background: linear-gradient(135deg, #f2f2f2 0 40%, #e04e39 40% 55%, #222 55% 70%, #f2f2f2 70%); }
+  .shot { background: repeating-linear-gradient(#fff 0 18px, #eee 18px 20px); position: relative; }
+  .shot::after { content: "screenshot of the element"; position: absolute; inset: 0; display: grid; place-items: center; color: #999; font-size: 12px; }
+
+  #bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; border-radius: 999px; padding: 6px 8px; display: flex; gap: 8px; align-items: center; box-shadow: 0 6px 24px rgba(0,0,0,.35); z-index: 9; }
+  #bar button { background: #333; color: #fff; border: 0; border-radius: 999px; width: 32px; height: 32px; cursor: pointer; font-size: 16px; }
+  #bar span { min-width: 280px; text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Rich notifications: what a result looks like on Discord and Telegram</h1>
+<p class="note" id="vnote"></p>
+<div class="tabs" id="tabs"></div>
+<div class="grid">
+  <div class="panel"><h2>Discord (webhook)</h2><div id="dc"></div><div class="feas" id="fdc"></div></div>
+  <div class="panel"><h2>Telegram</h2><div id="tg"></div><div class="feas" id="ftg"></div></div>
+  <div class="panel"><h2>Desktop notification (unchanged, title + text)</h2><div id="toast"></div>
+    <h2 style="margin-top:14px">Email (plain text only in SDK 1.12)</h2><div id="mail"></div></div>
+</div>
+<div id="bar"><button id="prev">←</button><span id="label"></span><button id="next">→</button></div>
+
+<script>
+// ---------- sample data: one Nike restock monitor, wording from the sibling map's decided shapes ----------
+const URL_ = "https://www.nike.com/nl/t/air-max-95-heren-Wb0sQr/FQ1235-002";
+const GOAL = "Air Max 95 size 44 in stock under €180";
+const TITLE = "AI agent: " + GOAL;
+const O = {
+  metRepeat: { tab: "Goal met (Repeat)", kind: "met", headline: "Air Max 95 in size 44 is in stock under €180 now.",
+    readouts: [["Price", "€169.99"], ["Size 44", "In stock"]], cost: "$0.27 over 42 checks since Oct 9", hero: ["Price", "€169.99"] },
+  metOnce: { tab: "Goal met (Once)", kind: "met", headline: "Goal met",
+    readouts: [["Price", "€169.99"], ["Size 44", "In stock"]], summary: "Opened the product page, picked size 44 and read the price next to the size list.",
+    cost: "$0 (reused what it learned last time)", hero: ["Price", "€169.99"] },
+  notMet: { tab: "Goal not met (Once)", kind: "not", headline: "Goal not met",
+    readouts: [["Price", "€189.99"], ["Size 44", "Sold out"]], summary: "Size 44 is listed as sold out; the price is above €180.",
+    cost: "$0.21", hero: ["Size 44", "Sold out"] },
+  watching: { tab: "Watching… (Repeat start)", kind: "info", headline: "Watching: size 44 in stock and the price below €180.",
+    action: "I'll check every 15 min and notify you when it does. Later checks are free.", readouts: [["Price", "€189.99"], ["Size 44", "Sold out"]], cost: "$0.21" },
+  failed: { tab: "Failed (cap)", kind: "fail", headline: "Stopped after 40 steps, the Max steps per run limit.",
+    action: "If the agent was making progress, raise Max steps per run. Otherwise make the goal more specific.", cost: "$0.84" },
+  confirm: { tab: "Confirmation request", kind: "ask", headline: "Waiting for you: click “Place order” (€169.99) on the checkout page.",
+    action: "Open Cereal on this computer to Confirm or Decline. Nothing happens until you do.", cost: "$0.31 so far" },
+};
+const COLOR = { met: "#23a55a", not: "#f0b232", fail: "#f23f43", ask: "#5865f2", info: "#80848e" };
+const EMOJI = { met: "✅", not: "➖", fail: "⛔", ask: "✋", info: "👀" };
+
+// ---------- the plain body every variant shares with desktop/email (decided shape: headline, action, details, cost) ----------
+function plainBody(o) {
+  const l = [o.headline];
+  if (o.action) l.push(o.action);
+  (o.readouts || []).forEach(([k, v]) => l.push(k + ": " + v));
+  if (o.summary) l.push(o.summary);
+  l.push("Cost: " + o.cost);
+  return l.join("\n");
+}
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const dcShell = (inner, content = "") => `<div class="dc"><div class="who"><div class="av">AI</div><div style="flex:1">
+  <div><span class="name">Cereal</span><span class="bot">APP</span><span class="time">Today at 14:47</span></div>
+  ${content ? `<div class="content">${content}</div>` : ""}${inner}</div></div></div>`;
+const tgShell = (inner) => `<div class="tg"><div class="from">Cereal bot</div><div class="bubble">${inner}<div class="meta">14:47</div></div></div>`;
+
+// ---------- variants ----------
+const V = {
+  A: { name: "Plain text (today)", note: "What ships today: the host turns title + text into a Discord message and a plain Telegram message. Nothing to build.",
+    dc: o => dcShell("", `<b>${esc(TITLE)}</b>\n${esc(plainBody(o))}`),
+    tg: o => tgShell(esc(TITLE + "\n" + plainBody(o))),
+    fdc: `<b class="ok">Works today.</b>`, ftg: `<b class="ok">Works today.</b>` },
+
+  B: { name: "Structured card", note: "Same words, laid out: a colour per outcome, headline as a link to the page, Readouts as fields, action line as the description, goal + cost in the footer. Telegram: bold headline, link, no preview. Script-only.",
+    dc: o => dcShell(`<div class="embed" style="border-color:${COLOR[o.kind]}">
+        <div><a class="t">${esc(o.headline)}</a>${o.action ? `<div class="d">${esc(o.action)}</div>` : ""}${o.summary ? `<div class="d">${esc(o.summary)}</div>` : ""}</div><div></div>
+        ${(o.readouts || []).length ? `<div class="fields">${o.readouts.map(([k, v]) => `<div class="f"><div class="fn">${esc(k)}</div><div class="fv">${esc(v)}</div></div>`).join("")}</div>` : ""}
+        <div class="foot">${esc(GOAL)} · Cost: ${esc(o.cost)} · nike.com</div></div>`),
+    tg: o => tgShell(`${EMOJI[o.kind]} <b>${esc(o.headline)}</b>\n${o.action ? esc(o.action) + "\n" : ""}${(o.readouts || []).map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join("\n")}${o.readouts ? "\n" : ""}${o.summary ? `<i>${esc(o.summary)}</i>\n` : ""}<a>Open page</a> · Cost: ${esc(o.cost)}\n<span style="color:#8a9aa8">${esc(GOAL)}</span>`),
+    fdc: `<b class="ok">Script-only.</b> SDK 1.12 <code>discordMessage { embed { … } }</code>; webhook left null → host uses the user's global webhook.`,
+    ftg: `<b class="ok">Script-only.</b> <code>parseMode = HTML</code> with escaping (Markdown breaks on <code>_</code> in URLs); token/chat left null → global settings.` },
+
+  C: { name: "Drop alert (product image)", note: "Built for restock/price buyers: the key Readout is the big title, the site's own product image (og:image, already a public URL) as thumbnail, page link up front. Telegram shows the page's link preview, so the image comes free. Script-only, but the og:image and preview only exist on public product pages.",
+    dc: o => dcShell(`<div class="embed" style="border-color:${COLOR[o.kind]}">
+        <div>${o.hero ? `<div class="fn">${esc(o.hero[0])}</div><div class="big">${esc(o.hero[1])}</div>` : ""}
+          <a class="t">${EMOJI[o.kind]} ${esc(o.headline)}</a>${o.action ? `<div class="d">${esc(o.action)}</div>` : ""}</div>
+        ${o.kind === "fail" ? "<div></div>" : `<div class="thumb shoe" title="og:image of the page"></div>`}
+        ${(o.readouts || []).filter(r => !o.hero || r[0] !== o.hero[0]).length ? `<div class="fields">${o.readouts.filter(r => !o.hero || r[0] !== o.hero[0]).map(([k, v]) => `<div class="f"><div class="fn">${esc(k)}</div><div class="fv">${esc(v)}</div></div>`).join("")}</div>` : ""}
+        <div class="foot">${esc(GOAL)} · Cost: ${esc(o.cost)}</div></div>`, o.kind === "met" ? "@here" : ""),
+    tg: o => tgShell(`${EMOJI[o.kind]} <b>${o.hero ? esc(o.hero[1]) + " · " : ""}${esc(o.headline)}</b>\n${o.action ? esc(o.action) + "\n" : ""}${(o.readouts || []).filter(r => !o.hero || r[0] !== o.hero[0]).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("\n")}\n<a>${URL_}</a>\nCost: ${esc(o.cost)}${o.kind === "fail" ? "" : `<div class="preview"><div class="site">Nike.com</div><div class="ptitle">Nike Air Max 95 Herenschoen</div><div class="pimg shoe"></div></div>`}`),
+    fdc: `<b class="ok">Script-only.</b> Thumbnail = page's <code>og:image</code> URL read via CDP (no upload). <b class="no">Risk:</b> missing on logged-in/checkout pages; a ping (@here) is opt-in at best.`,
+    ftg: `<b class="ok">Script-only.</b> Link preview on (<code>disableWebPagePreview = false</code>): Telegram fetches the URL itself, so it leaks the URL to Telegram and shows nothing for logged-in pages.` },
+
+  D: { name: "Screenshot (needs host)", note: "The card from B plus a screenshot of the element the Check/Readout looked at. Not buildable today: the host posts webhooks as JSON (no file upload) and Telegram as sendMessage only, so a screenshot would need a public image host. Secrets: no screenshot once a secret was typed (same rule as the model's screenshot tool).",
+    dc: o => V.B.dc(o).replace(/<div class="foot">/, `${o.kind === "fail" ? "" : '<div class="img shot"></div>'}<div class="foot">`),
+    tg: o => o.kind === "fail" ? V.B.tg(o) : `<div class="tg"><div class="from">Cereal bot</div><div class="bubble" style="padding:4px"><div class="shot" style="height:170px;border-radius:8px"></div><div style="padding:4px 6px">${V.B.tg(o).split('<div class="bubble">')[1]}`,
+    fdc: `<b class="no">Needs host:</b> multipart upload (<code>attachment://</code>) in <code>DiscordHttpClient</code> + an SDK image field. Script-only fallback = uploading pages to a third-party host: rejected (privacy).`,
+    ftg: `<b class="no">Needs host:</b> <code>sendPhoto</code> in <code>TelegramHttpClient</code> + an SDK photo field.` },
+};
+
+// ---------- wiring ----------
+const keys = Object.keys(V), outs = Object.keys(O);
+const q = new URLSearchParams(location.search);
+let v = keys.includes(q.get("variant")) ? q.get("variant") : "A";
+let o = outs.includes(q.get("outcome")) ? q.get("outcome") : "metRepeat";
+function render() {
+  const x = V[v], d = O[o];
+  try { history.replaceState(null, "", `?variant=${v}&outcome=${o}`); } catch {} // fails on data:/sandboxed previews
+  document.getElementById("label").textContent = `${v} (${x.name})`;
+  document.getElementById("vnote").textContent = x.note;
+  document.getElementById("tabs").innerHTML = outs.map(k => `<button class="${k === o ? "on" : ""}" data-o="${k}">${O[k].tab}</button>`).join("");
+  document.getElementById("dc").innerHTML = x.dc(d);
+  document.getElementById("tg").innerHTML = x.tg(d);
+  document.getElementById("fdc").innerHTML = x.fdc;
+  document.getElementById("ftg").innerHTML = x.ftg;
+  document.getElementById("toast").innerHTML = `<div class="toast"><div class="ic"></div><div><div class="tt">${esc(TITLE)}</div><div class="tb">${esc(plainBody(d))}</div></div></div>`;
+  document.getElementById("mail").textContent = `Subject: ${TITLE}\n\n${plainBody(d)}\n${URL_}`;
+}
+const step = n => { v = keys[(keys.indexOf(v) + n + keys.length) % keys.length]; render(); };
+document.getElementById("prev").onclick = () => step(-1);
+document.getElementById("next").onclick = () => step(1);
+document.getElementById("tabs").onclick = e => { if (e.target.dataset.o) { o = e.target.dataset.o; render(); } };
+addEventListener("keydown", e => { if (e.target.closest("input,textarea,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") step(-1); if (e.key === "ArrowRight") step(1); });
+render();
+</script>
+</body>
+</html>

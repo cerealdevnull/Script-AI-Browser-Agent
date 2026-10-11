@@ -2,6 +2,35 @@
 
 For [First-time walkthrough: where does a new user get stuck?](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/9).
 
+## Result (2026-10-11)
+
+The live walkthrough hit **every suspected friction point** below. Nothing beyond them was reported. No per-step
+notes, screenshots or costs were recorded, so the Expected text below stands as the record of what was seen.
+
+Friction, ranked by the map's rule (first-run friction first: setup, then validation, then first result; ties go to
+risk of lost trust or money), and the ticket that owns each item:
+
+1. **Setup:** API key looks optional but is required. Base URL comes before the key. "Model id" is jargon. Defaults
+   (Opus, $3 / $10) don't match the decided Sonnet with $2 / $5. Secret, interval and Re-learn fields show on goals that
+   don't need them. Secret names are unclear. → [How should the form get a first-time user…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/10),
+   [What cost caps and cost signals…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/18)
+2. **Validation:** config errors show only after the start, one at a time. A wrong key or model fails only after
+   Chrome opens, and both get the same message. A URL without `https://` is rejected.
+   → [When and how should the script report a bad configuration?](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/11)
+3. **First result:** "Goal not met" reads like a failure for a question goal. "steps" is jargon. The cap message
+   doesn't say what to raise. → [What should each failure and stop message tell the user to do?](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/12),
+   [How should goal wording fit the run mode…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/34)
+4. **Money, Repeat:** a question goal in Repeat learns no Check, so every check pays for model steps.
+   → [How should goal wording fit the run mode…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/34)
+5. **Money, Re-learn:** Re-learn stays on and silently relearns on every start.
+   → [How should a user reset what was learned…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/17)
+6. **Trust, Repeat:** silence after the learned run; learned and replayed runs look alike.
+   → [How does a Repeat monitor show it is alive…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/15)
+7. **Trust, confirmation:** two Chrome windows, raw element text, leaving the Tasks screen declines, and a Decline ends
+   as a red Error. → [What should the confirmation dialog look like…](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/16)
+8. **Status line:** long one-line step text, developer-style log lines.
+   → [What should the status line show while a run is working?](https://github.com/cerealdevnull/Script-AI-Browser-Agent/issues/13)
+
 **How to use this:** each step lists what the code says you will see (**Expected**) and the friction the code
 suggests (**Suspected friction**). During the live run, fill in **Observed** with what really happened, what confused
 you, and a screenshot. Strike out a suspicion the run disproves. Add anything the code didn't predict. The live

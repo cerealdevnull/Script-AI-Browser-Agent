@@ -106,11 +106,11 @@ Failure kinds, ranked by impact on restock and price monitors:
 
 1. **False "Goal met" after a rejected finish** (Zalando). A finish retry may flip `goal_met` to pass verification, so the user gets a false alert and the monitor stops.
 2. **The goal can't be expressed as a Check, so nothing is cached and every run re-learns** (Nike, Zalando). Numeric conditions and "size X in stock" don't fit `textContains`/`textAbsent` on one element. Every Repeat run then costs a full learn run.
-3. **Content missing from the snapshot.** Iframe content (w3schools) and a custom size dropdown (Zalando) are invisible, so the agent reasons from the wrong elements.
+3. **Content missing from the snapshot.** Iframe content (w3schools) is invisible. Zalando's size list is rendered at the end of the page, past the 14k-char snapshot limit, so the agent reasons from the wrong elements.
 4. **Off-domain consent walls trigger a confirmation** (ad.nl). An unattended monitor stalls on a cookie wall, and the model accepts all cookies.
 5. **Detached nodes on re-rendering pages** (Zalando). Clicks on a ref whose node was re-rendered fail and waste steps.
 6. **New tabs are not followed** (w3schools). The agent stays on the old page.
 7. **Ambiguous text refs in Readouts** (Zalando). A minor problem: verification catches it.
 
 Not seen: bot walls or CAPTCHAs (Nike, Zalando and Ticketmaster all loaded in headed Chrome), oversized snapshots
-(the largest step had about 12k input tokens), shadow DOM (unconfirmed: the Zalando dropdown may be one).
+(the largest step had about 12k input tokens). The Zalando size list is not shadow DOM: it sits at char ~65k of the snapshot (see `research/zalando-size-list`).

@@ -39,10 +39,10 @@ private val HTTP = OkHttpClient.Builder().readTimeout(10, TimeUnit.MINUTES).call
 private val JSON = "application/json".toMediaType()
 
 /**
- * A local pass-through to the real Anthropic API that keeps every request body and response: the script's Base URL
- * points here, so this is exactly the model traffic that left the machine.
+ * A local pass-through to the real model API ([upstream], Anthropic by default) that keeps every request body and
+ * response: the script's Base URL points here, so this is exactly the model traffic that left the machine.
  */
-class ModelTraffic : AutoCloseable {
+class ModelTraffic(private val upstream: String = AnthropicClient.DEFAULT_BASE_URL) : AutoCloseable {
     class Exchange(val request: String, val code: Int, val response: String)
 
     val exchanges = CopyOnWriteArrayList<Exchange>()
@@ -54,7 +54,7 @@ class ModelTraffic : AutoCloseable {
                     override fun dispatch(request: RecordedRequest): MockResponse {
                         val body = request.body!!.utf8()
                         val forward =
-                            Request.Builder().url(AnthropicClient.DEFAULT_BASE_URL + request.url.encodedPath)
+                            Request.Builder().url(upstream.trimEnd('/') + request.url.encodedPath)
                                 .apply { FORWARDED.forEach { h -> request.headers[h]?.let { header(h, it) } } }
                                 .post(body.toRequestBody(JSON)).build()
                         HTTP.newCall(forward).execute().use { r ->
@@ -88,7 +88,7 @@ class ModelTraffic : AutoCloseable {
     override fun close() = server.close()
 
     private companion object {
-        val FORWARDED = listOf("x-api-key", "anthropic-version", "anthropic-beta")
+        val FORWARDED = listOf("x-api-key", "anthropic-version", "anthropic-beta", "Authorization")
     }
 }
 

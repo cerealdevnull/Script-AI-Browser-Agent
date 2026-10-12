@@ -51,7 +51,7 @@ class ConfirmationTest {
         assertEquals(1, host.dialogs.size)
         assertEquals(1, model.requests.size)
         assertFalse("/order.html" in site.requested, "the order was submitted")
-        assertEquals("Confirmation needed: click on button \"Place order\"", host.notifications.first().message)
+        assertEquals("Confirmation needed: Place this order on 127.0.0.1?", host.notifications.first().message)
         assertTrue(host.notifications.last().message.startsWith("Declined by user\n"), host.notifications.last().message)
     }
 
@@ -157,7 +157,61 @@ class ConfirmationTest {
     }
 
     @Test
-    fun `the dialog shows action, element, URL and reason, HTML-escaped`() {
+    fun `the dialog asks one plain question with the button text, the reason and two buttons, and logs the raw step`() {
+        site.pages["checkout.html"] =
+            javaClass.getResource("/fixtures/checkout.html")!!.readText().replace(">Place order<", ">Place your order – $12.49<")
+        host.dialogAnswers += declineClicked
+        val model =
+            ScriptedModel(
+                {
+                    listOf(
+                        call(
+                            "click",
+                            """{"ref": ${it.ref("button", "Place your order – $12.49")}, "irreversible": true, "reason": "This places the order."}""",
+                        ),
+                    )
+                },
+            )
+
+        run(model, "checkout.html")
+
+        val html = host.dialogs.single()
+        assertTrue("AI Browser Agent · needs your OK" in html, html)
+        assertTrue("Place this order on 127.0.0.1?" in html, html)
+        assertTrue("It will press “Place your order – $12.49”" in html, html)
+        assertTrue("This places the order." in html, html)
+        assertTrue(html.indexOf(">No, stop here</a>") in 0 until html.indexOf(">Yes, place this order</a>"), html)
+        assertTrue("Closing this window, or leaving the Tasks screen, counts as No. The task waits until you answer." in html, html)
+        assertFalse("button &quot;" in html || "button \"" in html || site.url("checkout.html") in html || "<script" in html, html)
+        assertTrue(host.logs.any { "button \"Place your order – $12.49\"" in it && site.url("checkout.html") in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `without a reason the dialog says why the step was flagged`() {
+        host.dialogAnswers += declineClicked
+        val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("button", "Place order")}}""")) })
+
+        run(model, "checkout.html")
+
+        assertTrue("The agent gave no reason. It flagged this step because the button says “Place order”." in host.dialogs.single(), host.dialogs.single())
+    }
+
+    @Test
+    fun `a type step quotes the text it will send`() {
+        site.pages["lookup.html"] = """<html><body><form action="order.html"><input aria-label="Order number"></form></body></html>"""
+        host.dialogAnswers += declineClicked
+        val model = ScriptedModel({ listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1 & <b>\n"}""")) })
+
+        run(model, "lookup.html")
+
+        val html = host.dialogs.single()
+        assertTrue("Send this text on 127.0.0.1?" in html, html)
+        assertTrue("It will send: “A-1 &amp; &lt;b&gt;”" in html, html)
+        assertTrue(">Yes, send this text</a>" in html, html)
+    }
+
+    @Test
+    fun `the dialog HTML-escapes the button text and the reason`() {
         site.pages["checkout.html"] =
             javaClass.getResource("/fixtures/checkout.html")!!.readText().replace(">Place order<", ">Place &lt;b&gt;order&lt;/b&gt; &amp; pay<")
         host.dialogAnswers += declineClicked
@@ -176,10 +230,8 @@ class ConfirmationTest {
         run(model, "checkout.html")
 
         val html = host.dialogs.single()
-        assertTrue("click" in html, html)
         assertTrue("Place &lt;b&gt;order&lt;/b&gt; &amp; pay" in html, html)
         assertTrue("&lt;script&gt;alert(1)&lt;/script&gt;" in html, html)
-        assertTrue(site.url("checkout.html") in html, html)
         assertFalse("<script>alert" in html || "<b>order" in html, html)
     }
 

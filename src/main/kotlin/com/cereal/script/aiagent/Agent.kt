@@ -56,8 +56,36 @@ sealed interface Outcome {
     class Declined(override val steps: Int) : Outcome
 }
 
-/** An irreversible step waiting for the user's yes: [element] is the target's `role "name"`, [reason] the model's. */
-class Confirmation(val action: String, val element: String, val url: String, val reason: String?)
+/**
+ * An irreversible step waiting for the user's yes: [element] is the target's `role "name"`, [reason] the model's,
+ * [text] what a `type` sends.
+ */
+class Confirmation(val action: String, val element: String, val url: String, val reason: String?, val text: String? = null) {
+    /** The element's label: the `name` of `role "name"`. */
+    val label get() = element.substringAfter('"').removeSuffix("\"")
+
+    /** What the step does, in plain words: "Place this order". */
+    val verb
+        get() =
+            if (action == "type") {
+                "Send this text"
+            } else {
+                VERBS.entries.firstOrNull { (k, _) -> Regex("\\b$k\\b").containsMatchIn(label.lowercase()) }?.value ?: "Press “$label”"
+            }
+
+    /** The dialog headline and notification: "Place this order on amazon.com?". */
+    val question get() = "$verb on ${hostOf(url)?.let(::registrableDomain) ?: url}?"
+
+    private companion object {
+        // ponytail: English keywords only (Irreversible also knows Dutch, which falls back to "Press “…”").
+        val VERBS =
+            linkedMapOf(
+                "cancel subscription" to "Cancel this subscription", "delete" to "Delete this", "order" to "Place this order",
+                "place" to "Place this order", "buy" to "Buy this", "pay" to "Make this payment", "send" to "Send this",
+                "submit" to "Submit this", "confirm" to "Confirm this",
+            )
+    }
+}
 
 /** [taskSpent]: what earlier runs of this task cost, counted against [maxTaskCost]. */
 class Caps(val maxSteps: Int, val maxRunCost: Double, val maxTaskCost: Double, val taskSpent: Double = 0.0)
@@ -495,7 +523,7 @@ class Agent(
             if (irreversible.signInSubmit(call.name, ref, text)) return log("model flag cleared: sign-in submit")
         }
         val reason = (call.args["reason"] as? JsonPrimitive)?.contentOrNull
-        if (!confirm(Confirmation(call.name, browser.describe(ref), browser.url(), reason))) throw DeclinedException()
+        if (!confirm(Confirmation(call.name, browser.describe(ref), browser.url(), reason, text))) throw DeclinedException()
     }
 
     private class DeclinedException : Exception("declined by user")

@@ -46,7 +46,7 @@ class ConfigValidationTest {
     fun `task cost cap must be positive`() = assertRejected(TestConfig(maxTaskCost = -1.0), "Max $ per task must be > 0")
 
     @Test
-    fun `repeat interval must be positive`() = assertRejected(TestConfig(repeatInterval = 0), "Repeat interval must be > 0")
+    fun `repeat interval must be positive`() = assertRejected(TestConfig(repeatInterval = 0), "Check every must be > 0")
 
     /** An invalid config ends with Error and a notification, and makes no model call. */
     private fun assertRejected(config: TestConfig, reason: String) =

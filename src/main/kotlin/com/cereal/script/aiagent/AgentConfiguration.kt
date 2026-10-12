@@ -15,7 +15,9 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 0,
         keyName = "goal",
         name = "Goal",
-        description = "What the agent should do, in plain language. For example: tell me whether Long Nose Pliers is in stock.",
+        description =
+            "What the agent should do, in plain language. Once: tell me whether Long Nose Pliers is in stock. " +
+                "Repeat: notify me when Long Nose Pliers is in stock.",
     )
     fun goal(): String
 
@@ -23,7 +25,7 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 1,
         keyName = "startUrl",
         name = "Start URL",
-        description = "The http(s) page the agent starts on.",
+        description = "The page the agent starts on, e.g. https://example.com.",
     )
     fun startUrl(): String
 
@@ -39,6 +41,15 @@ interface AgentConfiguration : ScriptConfiguration {
 
     @ScriptConfigurationItem(
         position = 3,
+        keyName = "repeatInterval",
+        name = "Check every (seconds)",
+        description = "How long to wait between checks.",
+        stateModifier = CheckEveryState::class,
+    )
+    fun repeatInterval(): Int = 300
+
+    @ScriptConfigurationItem(
+        position = 4,
         keyName = "provider",
         name = "Provider",
         description =
@@ -49,22 +60,24 @@ interface AgentConfiguration : ScriptConfiguration {
     fun provider(): Provider = Provider.Anthropic
 
     @ScriptConfigurationItem(
-        position = 4,
+        position = 5,
         keyName = "apiKey",
         name = "API key",
         description =
             "Your key from the provider above, sent only to them. Get one at: Anthropic https://console.anthropic.com/settings/keys · " +
-                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys. Optional for Custom.",
+                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys · " +
+                "OpenRouter https://openrouter.ai/settings/keys. Optional for Custom.",
         stateModifier = ApiKeyState::class,
     )
     fun apiKey(): Secret?
 
     @ScriptConfigurationItem(
-        position = 5,
+        position = 6,
         keyName = "model",
         name = "Model",
         description =
-            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna). " +
+            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna, " +
+                "OpenRouter: Claude Sonnet 5.5). " +
                 "Required for Custom.",
         stateModifier = ModelState::class,
     )
@@ -72,7 +85,7 @@ interface AgentConfiguration : ScriptConfiguration {
 
     // Was "Base URL"; the keyName stays.
     @ScriptConfigurationItem(
-        position = 6,
+        position = 7,
         keyName = "baseUrl",
         name = "Server URL",
         description = "Your server's OpenAI-compatible address, e.g. http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio).",
@@ -81,7 +94,7 @@ interface AgentConfiguration : ScriptConfiguration {
     fun baseUrl(): String?
 
     @ScriptConfigurationItem(
-        position = 7,
+        position = 31,
         keyName = "maxSteps",
         name = "Max steps per run",
         description = "Each model call is one step. A run that reaches this many steps stops.",
@@ -89,7 +102,7 @@ interface AgentConfiguration : ScriptConfiguration {
     fun maxSteps(): Int = 40
 
     @ScriptConfigurationItem(
-        position = 8,
+        position = 32,
         keyName = "maxRunCost",
         name = "Max $ per run",
         description = "A run stops once its model calls have cost this many dollars.",
@@ -97,7 +110,7 @@ interface AgentConfiguration : ScriptConfiguration {
     fun maxRunCost(): Double = 3.0
 
     @ScriptConfigurationItem(
-        position = 9,
+        position = 33,
         keyName = "maxTaskCost",
         name = "Max $ per task",
         description = "The task stops once all its runs together have cost this many dollars. Resets when the task restarts.",
@@ -105,18 +118,12 @@ interface AgentConfiguration : ScriptConfiguration {
     fun maxTaskCost(): Double = 10.0
 
     @ScriptConfigurationItem(
-        position = 10,
-        keyName = "repeatInterval",
-        name = "Repeat interval (seconds)",
-        description = "Repeat mode only: how long to wait between checks.",
-    )
-    fun repeatInterval(): Int = 300
-
-    @ScriptConfigurationItem(
         position = 20,
         keyName = "secret1Name",
-        name = "Secret 1 name",
-        description = "The name the agent sees for this secret, e.g. email or password (lowercase, digits, _).",
+        name = "Secret 1 label",
+        description =
+            "What this is, in one word, e.g. email or password. Use the word in your goal (log in with my email and password) " +
+                "and the agent types the value for you. The AI never sees the value.",
     )
     fun secret1Name(): String?
 
@@ -124,15 +131,16 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 21,
         keyName = "secret1Value",
         name = "Secret 1 value",
-        description = "Typed into the site when the agent asks for it by name; never shown to the model.",
+        description = "The value itself, e.g. your password. Hidden from the AI and the logs.",
     )
     fun secret1Value(): Secret?
 
     @ScriptConfigurationItem(
         position = 22,
         keyName = "secret2Name",
-        name = "Secret 2 name",
-        description = "The name the agent sees for this secret, e.g. email or password (lowercase, digits, _).",
+        name = "Secret 2 label",
+        description = "Another word, e.g. password.",
+        stateModifier = Secret2State::class,
     )
     fun secret2Name(): String?
 
@@ -140,15 +148,17 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 23,
         keyName = "secret2Value",
         name = "Secret 2 value",
-        description = "Typed into the site when the agent asks for it by name; never shown to the model.",
+        description = "The value itself. Hidden from the AI and the logs.",
+        stateModifier = Secret2State::class,
     )
     fun secret2Value(): Secret?
 
     @ScriptConfigurationItem(
         position = 24,
         keyName = "secret3Name",
-        name = "Secret 3 name",
-        description = "The name the agent sees for this secret, e.g. email or password (lowercase, digits, _).",
+        name = "Secret 3 label",
+        description = "Another word, e.g. password.",
+        stateModifier = Secret3State::class,
     )
     fun secret3Name(): String?
 
@@ -156,7 +166,8 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 25,
         keyName = "secret3Value",
         name = "Secret 3 value",
-        description = "Typed into the site when the agent asks for it by name; never shown to the model.",
+        description = "The value itself. Hidden from the AI and the logs.",
+        stateModifier = Secret3State::class,
     )
     fun secret3Value(): Secret?
 
@@ -208,6 +219,7 @@ enum class Provider(val baseUrl: String?, val recommendedModel: String?, val key
     Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
     Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash", "https://aistudio.google.com/apikey"),
     OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna", "https://platform.openai.com/api-keys"),
+    OpenRouter("https://openrouter.ai/api/v1", "anthropic/claude-sonnet-5.5", "https://openrouter.ai/settings/keys"),
     Custom(null, null, null),
 }
 
@@ -232,3 +244,22 @@ object ServerUrlState : StateModifier {
 
     override fun getError(config: ScriptConfig): String? = null
 }
+
+object CheckEveryState : StateModifier {
+    override fun getVisibility(config: ScriptConfig) =
+        if ((config.valueForKey("runMode") as? ScriptConfigValue.EnumScriptConfigValue)?.value == RunMode.Repeat) Visibility.VisibleRequired else Visibility.Hidden
+
+    override fun getError(config: ScriptConfig): String? = null
+}
+
+/** Secret slot N shows once slot N-1 has a label. */
+abstract class NextSecretState(private val previousLabelKey: String) : StateModifier {
+    override fun getVisibility(config: ScriptConfig) =
+        if ((config.valueForKey(previousLabelKey) as? ScriptConfigValue.StringScriptConfigValue)?.value.isNullOrBlank()) Visibility.Hidden else Visibility.VisibleOptional
+
+    override fun getError(config: ScriptConfig): String? = null
+}
+
+object Secret2State : NextSecretState("secret1Name")
+
+object Secret3State : NextSecretState("secret2Name")

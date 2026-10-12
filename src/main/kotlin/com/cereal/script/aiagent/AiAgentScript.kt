@@ -291,7 +291,7 @@ class AiAgentScript(
             config.maxSteps() <= 0 -> "Max steps per run must be > 0"
             config.maxRunCost() <= 0 -> "Max \$ per run must be > 0"
             config.maxTaskCost() <= 0 -> "Max \$ per task must be > 0"
-            config.repeatInterval() <= 0 -> "Repeat interval must be > 0"
+            config.repeatInterval() <= 0 -> "Check every must be > 0"
             else -> validateSecrets(config)
         }
     }

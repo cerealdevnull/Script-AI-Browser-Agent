@@ -58,6 +58,8 @@ class StaticErrorsTest {
         assertNull(model(Provider.Anthropic, "opus"))
         assertNull(model(Provider.Custom, "gpt-5.6-luna"))
         assertNull(model(Provider.Custom, "anthropic/claude-sonnet-5.5"))
+        assertNull(model(Provider.Gemini, "models/gemini-3.8-flash"))
+        assertEquals("`models/gemini-3.8-flash` is a Gemini model. Clear Model to use OpenAI's recommended model.", model(Provider.OpenAI, "models/gemini-3.8-flash"))
     }
 
     @Test

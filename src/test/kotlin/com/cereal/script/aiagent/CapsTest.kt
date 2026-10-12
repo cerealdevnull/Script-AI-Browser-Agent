@@ -136,6 +136,16 @@ class CapsTest {
     }
 
     @Test
+    fun `a reply that names no model shows its cost as unknown model`() {
+        val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf(null))
+        val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
+
+        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+
+        assertEquals("In stock.\nCost: unknown (no price for unknown model)", host.notifications.single().message)
+    }
+
+    @Test
     fun `a run where some steps had no price shows the priced part plus unknown`() {
         val model =
             ScriptedModel(

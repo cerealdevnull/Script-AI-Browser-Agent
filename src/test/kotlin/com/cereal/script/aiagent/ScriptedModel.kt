@@ -11,7 +11,7 @@ class ScriptedModel(
     vararg turns: suspend (ModelRequest) -> List<ToolCall>,
     private val usage: Usage = Usage(1000, 100),
     /** The responding model per turn; [MODEL] once the list runs out. */
-    private val models: List<String> = emptyList(),
+    private val models: List<String?> = emptyList(),
 ) : ModelClient {
     private val turns = ArrayDeque(turns.toList())
     val requests = mutableListOf<ModelRequest>()

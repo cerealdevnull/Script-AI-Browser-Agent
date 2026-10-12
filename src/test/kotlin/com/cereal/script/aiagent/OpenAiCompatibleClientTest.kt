@@ -220,6 +220,16 @@ class OpenAiCompatibleClientTest {
             )
         }
 
+    @Test
+    fun `a Custom server gets no cache_control, even for a Claude-named model`() =
+        runBlocking {
+            enqueue()
+
+            OpenAiCompatibleClient(baseUrl, null, "claude-proxy", custom = true).send(request(Message.User("Goal: x")))
+
+            assertFalse("cache_control" in api.takeRequest().body!!.utf8())
+        }
+
     // Trimming rewrites an old message each step, which breaks the cached prefix; the Anthropic preset keeps them too.
     @Test
     fun `a Claude model keeps every snapshot whole`() =

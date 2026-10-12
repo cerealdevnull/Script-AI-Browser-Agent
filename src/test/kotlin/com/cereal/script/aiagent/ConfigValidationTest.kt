@@ -46,7 +46,14 @@ class ConfigValidationTest {
     fun `task cost cap must be positive`() = assertRejected(TestConfig(maxTaskCost = -1.0), "Max $ per task must be > 0")
 
     @Test
-    fun `repeat interval must be positive`() = assertRejected(TestConfig(repeatInterval = 0), "Check every must be > 0")
+    fun `repeat interval must be positive`() = assertRejected(TestConfig(runMode = RunMode.Repeat, repeatInterval = 0), "Check every must be > 0")
+
+    @Test
+    fun `a Once task ignores the hidden Check every`() = assertRejected(TestConfig(apiKey = null, repeatInterval = 0), "API key is required for Anthropic")
+
+    @Test
+    fun `a hidden secret slot is not validated`() =
+        assertRejected(TestConfig(apiKey = null, secrets = listOf(null to null, null to Secret("b"))), "API key is required for Anthropic")
 
     @Test
     fun `an old saved task lists every problem in one notification`() =
@@ -54,7 +61,7 @@ class ConfigValidationTest {
             val host = Host()
             val model = ScriptedModel()
 
-            val result = host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(apiKey = null, repeatInterval = 0))
+            val result = host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(apiKey = null, runMode = RunMode.Repeat, repeatInterval = 0))
 
             val expected = "Fix these in the task settings: API key is required for Anthropic. Check every must be > 0."
             assertIs<ExecutionResult.Error>(result)

@@ -25,12 +25,14 @@ class FailureTest {
         }
 
     @Test
-    fun `a rejected key ends the run with Error and a notification with the cost suffix`() {
-        val result = run(failingModel(ModelException("Model/API key rejected: HTTP 401: invalid x-api-key")))
+    fun `a key revoked mid-run gets the pre-flight key wording, the HTTP body only in the log`() {
+        val result = run(failingModel(ModelException("Model/API key rejected: HTTP 401: invalid x-api-key", status = 401)))
 
+        val key = "Anthropic rejected your API key. Copy it again from https://console.anthropic.com/settings/keys into API key."
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key", result.message)
-        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key\nCost: \$0", host.notifications.single().message)
+        assertEquals(key, result.message)
+        assertEquals("$key\nCost: \$0", host.notifications.single().message)
+        assertTrue(host.logs.any { "invalid x-api-key" in it })
     }
 
     @Test

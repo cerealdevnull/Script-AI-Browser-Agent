@@ -204,11 +204,11 @@ fun AgentConfiguration.secrets(): Map<String, Secret> =
 enum class RunMode { Once, Repeat }
 
 /** A preset fixes the server and recommends a model; Custom takes both from the form. */
-enum class Provider(val baseUrl: String?, val recommendedModel: String?) {
-    Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5"),
-    Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
-    OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna"),
-    Custom(null, null),
+enum class Provider(val baseUrl: String?, val recommendedModel: String?, val keyUrl: String?) {
+    Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
+    Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash", "https://aistudio.google.com/apikey"),
+    OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna", "https://platform.openai.com/api-keys"),
+    Custom(null, null, null),
 }
 
 private fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value ?: Provider.Anthropic

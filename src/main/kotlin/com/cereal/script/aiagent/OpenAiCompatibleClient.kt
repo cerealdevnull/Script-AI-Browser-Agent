@@ -51,7 +51,6 @@ class OpenAiCompatibleClient(
                 // OpenRouter passes Anthropic's cache_control through: one breakpoint on the system prompt, one on the newest message.
                 put("messages", JsonArray(if (claude) messages.mapIndexed { i, m -> if (i == 0 || i == messages.lastIndex) cached(m) else m } else messages))
             }
-        val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
         val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body, sleep)
         val choice = json["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: throw ModelException("Model error: no choices in response")
         val message = choice["message"] as? JsonObject ?: throw ModelException("Model error: no message in response")
@@ -79,6 +78,26 @@ class OpenAiCompatibleClient(
             raw = message,
             text = message.str("content") ?: message.str("refusal"),
         )
+    }
+
+    private val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
+
+    /** Looks the model up in `GET /models` (Gemini lists `models/<id>`; OpenRouter adds `supported_parameters`). */
+    override suspend fun check(): Preflight? {
+        val json =
+            try {
+                getJson("${baseUrl.trimEnd('/')}/models", headers, sleep)
+            } catch (e: ModelException) {
+                // A Custom server without a models endpoint can't tell.
+                return if (e.status == 404) null else preflight(e)
+            }
+        val entry = json["data"]?.jsonArray.orEmpty().map { it.jsonObject }.firstOrNull { it.str("id")?.removePrefix("models/") == model }
+        val params = entry?.get("supported_parameters") as? JsonArray
+        return when {
+            entry == null -> Preflight.UnknownModel
+            params != null && params.none { (it as? JsonPrimitive)?.content == "tools" } -> Preflight.NoTools
+            else -> null
+        }
     }
 
     private val claude = "claude" in model.lowercase()

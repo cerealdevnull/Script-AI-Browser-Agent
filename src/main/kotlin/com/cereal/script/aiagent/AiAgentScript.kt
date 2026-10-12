@@ -335,12 +335,7 @@ class AiAgentScript(
 
     private fun validateSecrets(config: AgentConfiguration): String? {
         val slots = config.secretSlots()
-        slots.forEachIndexed { i, (name, value) ->
-            if (name != null && !SECRET_NAME.matches(name)) return "Secret ${i + 1} name must match ${SECRET_NAME.pattern}"
-            if (name == null && value != null) return "Secret ${i + 1} has a value but no name"
-        }
-        val names = slots.mapNotNull { it.first }
-        return names.groupBy { it }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { "Secret names must be unique: $it" }
+        return slots.indices.firstNotNullOfOrNull { i -> secretSlotErrors(slots, i).let { it.first ?: it.second } }
     }
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
@@ -385,8 +380,6 @@ private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 
 
 private fun escapeHtml(s: String) =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
-
-private val SECRET_NAME = Regex("[a-z][a-z0-9_]*")
 
 internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 

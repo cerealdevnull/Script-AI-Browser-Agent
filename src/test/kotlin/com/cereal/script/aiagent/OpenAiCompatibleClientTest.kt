@@ -95,6 +95,28 @@ class OpenAiCompatibleClientTest {
         }
 
     @Test
+    fun `GPT-6 Sol and Luna are sent reasoning_effort none so they can call tools`() =
+        runBlocking {
+            enqueue(3)
+            for (model in listOf("gpt-6-luna", "openai/gpt-6-sol-2026-09-22", "gpt-6-astra")) {
+                OpenAiCompatibleClient(baseUrl, "sk-test", model).send(request(Message.User("Goal: x")))
+            }
+
+            val efforts = List(3) { Json.parseToJsonElement(api.takeRequest().body!!.utf8()).jsonObject["reasoning_effort"]?.jsonPrimitive?.content }
+            assertEquals(listOf("none", "none", null), efforts)
+        }
+
+    @Test
+    fun `cache writes are split out of the prompt tokens`() =
+        runBlocking {
+            api.enqueue(MockResponse.Builder().body(toolCallResponse.replace("\"cached_tokens\":900", "\"cached_tokens\":900,\"cache_write_tokens\":200")).build())
+
+            val usage = OpenAiCompatibleClient(baseUrl, "sk-test", "gpt-6-luna").send(request(Message.User("Goal: x"))).usage
+
+            assertEquals(listOf(100L, 900L, 200L), listOf(usage.input, usage.cacheRead, usage.cacheWrite))
+        }
+
+    @Test
     fun `the API key is optional and then no auth header is sent`() =
         runBlocking {
             enqueue()

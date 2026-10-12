@@ -27,6 +27,8 @@ class OpenAiCompatibleClient(
         val body =
             buildJsonObject {
                 put("model", model)
+                // GPT-6 Sol / Luna call tools on Chat Completions only without reasoning (developers.openai.com model pages).
+                if (TOOLS_ONLY_WITHOUT_REASONING.matches(model.substringAfterLast('/'))) put("reasoning_effort", "none")
                 put("tool_choice", "auto")
                 put(
                     "tools",
@@ -55,7 +57,9 @@ class OpenAiCompatibleClient(
         val usage = json["usage"] as? JsonObject
         fun JsonObject?.long(key: String) = (this?.get(key) as? JsonPrimitive)?.longOrNull ?: 0L
         val prompt = usage.long("prompt_tokens")
-        val cached = (usage?.get("prompt_tokens_details") as? JsonObject).long("cached_tokens")
+        val details = usage?.get("prompt_tokens_details") as? JsonObject
+        val cached = details.long("cached_tokens")
+        val written = details.long("cache_write_tokens") // GPT-5.6+ bills these at 1.25x input
         // Gemini leaves thinking out of completion_tokens, so the real output is total − prompt.
         val output = maxOf(usage.long("total_tokens") - prompt, usage.long("completion_tokens"))
         return ModelTurn(
@@ -70,7 +74,7 @@ class OpenAiCompatibleClient(
             // A refusal comes as finish_reason "stop" with a refusal message; the agent knows Anthropic's "refusal".
             stopReason = if (message.str("refusal") != null) "refusal" else choice.str("finish_reason"),
             model = json.str("model"),
-            usage = Usage(prompt - cached, output, cacheRead = cached),
+            usage = Usage(prompt - cached - written, output, cacheRead = cached, cacheWrite = written),
             raw = message,
             text = message.str("content") ?: message.str("refusal"),
         )
@@ -138,5 +142,6 @@ class OpenAiCompatibleClient(
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
         private const val KEEP_SNAPSHOTS = 2
         private const val PAGE_CONTENT = "<page_content>"
+        private val TOOLS_ONLY_WITHOUT_REASONING = Regex("gpt-6-(sol|luna)(-\\d{4}-\\d{2}-\\d{2})?")
     }
 }

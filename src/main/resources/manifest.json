@@ -4,5 +4,5 @@
   "version_code": 1,
   "sdk_version": "@cereal-sdk-version@",
   "script": "com.cereal.script.aiagent.AiAgentScript",
-  "instructions": "Type a goal and a start URL, pick a model and enter your own API key. The agent drives your installed Google Chrome in a visible window and notifies you with the result."
+  "instructions": "Pick a provider and paste its API key (the key's description says where to get one). Write a goal and a start URL: Once does the task or answers the question, Repeat checks until a condition is true. A visible Chrome window opens, and the agent asks before it buys, pays or sends anything. A run with the default model costs about $0.20, capped at $2."
 }

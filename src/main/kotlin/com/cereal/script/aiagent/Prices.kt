@@ -18,7 +18,7 @@ object Prices {
             "claude-opus-4-8" to claude(5.0, 25.0),
             "claude-opus-4-7" to claude(5.0, 25.0),
             "claude-opus-4-6" to claude(5.0, 25.0),
-            "claude-sonnet-5-5" to claude(2.0, 10.0, 0.20),
+            "claude-sonnet-5-5" to claude(2.0, 10.0, 0.10),
             "claude-sonnet-5" to claude(2.0, 10.0),
             "claude-sonnet-4-6" to claude(3.0, 15.0),
             // ponytail: Haiku 5.5's > 100K-token prompt rate ($0.50 / $2.50) is ignored; snapshots stay well below it.

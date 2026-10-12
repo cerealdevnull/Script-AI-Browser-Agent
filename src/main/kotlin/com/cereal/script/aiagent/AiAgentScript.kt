@@ -171,7 +171,7 @@ class AiAgentScript(
                 learnedMet = cache?.met == true
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
-                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check) { m -> log.info(scrubber.forLog(m)) }
+                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -321,7 +321,7 @@ class AiAgentScript(
     /**
      * Stores what a finished learned or healed run can replay. Not when the Check or Readouts failed validation; a run
      * that found the goal already met can't show its Check tells met from not met, so it keeps the [cached] Check (a
-     * heal's) or none (a learned run's); a Once run needs a Check or a Readout.
+     * heal's, unless that Check just missed) or none (a learned run's); a Once run needs a Check or a Readout.
      */
     private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, cached: Check?, log: (String) -> Unit) {
         val check = if (run.goalMet) cached else run.check

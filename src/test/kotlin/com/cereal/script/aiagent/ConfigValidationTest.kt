@@ -19,6 +19,9 @@ class ConfigValidationTest {
     fun `non-http start URL`() = assertRejected(TestConfig(startUrl = "file:///etc/passwd"), "Start URL must be an http(s) URL")
 
     @Test
+    fun `start URL without a host`() = assertRejected(TestConfig(startUrl = "https:/example.com/shop"), "Start URL must be an http(s) URL")
+
+    @Test
     fun `missing API key`() = assertRejected(TestConfig(apiKey = null), "API key is required for Anthropic")
 
     @Test

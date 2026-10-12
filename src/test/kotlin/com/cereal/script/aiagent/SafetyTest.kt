@@ -149,6 +149,32 @@ class SafetyTest {
     }
 
     @Test
+    fun `a sign-in form on an account page (WooCommerce's my-account) still takes secrets`() {
+        site.pages["my-account.html"] =
+            """<html><head><title>My account</title></head><body><h1>My account</h1><form>
+            <label>Username or email address <input type="text" name="username"></label>
+            <label>Password <input type="password" name="password"></label>
+            <button type="submit" name="login">Log in</button></form></body></html>"""
+        val model =
+            ScriptedModel(
+                {
+                    listOf(
+                        call("type_secret", """{"ref": ${it.ref("textbox", "Username or email address")}, "field": "email"}"""),
+                        call("type_secret", """{"ref": ${it.ref("textbox", "Password")}, "field": "password"}"""),
+                    )
+                },
+                {
+                    for (r in it.lastResults) assertFalse(r.isError, r.text)
+                    listOf(call("fail", """{"reason": "x"}"""))
+                },
+            )
+
+        run(model, "my-account.html")
+
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
     fun `page text reaches the model only inside page_content`() {
         val model =
             ScriptedModel(

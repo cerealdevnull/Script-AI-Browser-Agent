@@ -185,15 +185,16 @@ interface AgentConfiguration : ScriptConfiguration {
     )
     fun allowedDomains(): List<AllowedDomain>?
 
+    // Replaces the Re-learn switch (keyName "reLearn", now unused).
     @ScriptConfigurationItem(
         position = 40,
-        keyName = "reLearn",
-        name = "Re-learn",
+        keyName = "onNextStart",
+        name = "On next start",
         description =
-            "Forget what was learned for this goal when the task starts (e.g. after the site changed). " +
-                "The Chrome profile is kept: log out on the site, or delete the task, to reset it.",
+            "Use this when the site changed or the agent keeps doing the wrong thing. It acts once, when you change it and start the task. " +
+                "To do it again, pick another option first. Signing out deletes this task's browser data (cookies, saved logins).",
     )
-    fun reLearn(): Boolean = false
+    fun onNextStart(): OnNextStart = OnNextStart.Keep
 
     // Nested so the shrunk jar's metadata restore (AgentConfiguration*.class) covers it: the host reflects on it.
     interface AllowedDomain : ScriptConfigurationListItem {
@@ -243,6 +244,16 @@ fun secretSlotErrors(slots: List<Pair<String?, Secret?>>, i: Int): Pair<String?,
 }
 
 enum class RunMode { Once, Repeat }
+
+/** What a task start resets, once: only when the choice changed since the last start. */
+enum class OnNextStart(private val label: String, val status: String?) {
+    Keep("Keep what was learned and sign-ins", null),
+    ForgetSteps("Forget learned steps", "Forgot learned steps"),
+    ForgetStepsAndSignOut("Forget learned steps and sign out", "Forgot learned steps and sign-ins"),
+    ;
+
+    override fun toString() = label
+}
 
 /** A preset fixes the server and recommends a model; Custom takes both from the form. */
 enum class Provider(val baseUrl: String?, val recommendedModel: String?, val keyUrl: String?) {

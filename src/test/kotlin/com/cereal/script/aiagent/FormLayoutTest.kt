@@ -56,7 +56,7 @@ class FormLayoutTest {
             listOf(
                 "goal", "startUrl", "runMode", "repeatInterval", "provider", "apiKey", "model", "baseUrl",
                 "secret1Name", "secret1Value", "secret2Name", "secret2Value", "secret3Name", "secret3Value",
-                "allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost", "reLearn",
+                "allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost", "onNextStart",
             ),
             order,
         )

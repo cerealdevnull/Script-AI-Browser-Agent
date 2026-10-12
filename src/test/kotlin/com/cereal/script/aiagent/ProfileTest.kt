@@ -4,6 +4,8 @@ import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -15,8 +17,10 @@ class ProfileTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>) =
-        runBlocking { host.run(AiAgentScript({ ScriptedModel(*turns) }, profiles), TestConfig(goal = goal, startUrl = site.url("session.html"))) }
+    private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>, onNextStart: OnNextStart = OnNextStart.Keep) =
+        runBlocking {
+            host.run(AiAgentScript({ ScriptedModel(*turns) }, profiles), TestConfig(goal = goal, startUrl = site.url("session.html"), onNextStart = onNextStart))
+        }
 
     private fun finish(): List<ToolCall> = listOf(call("finish", """{"goal_met": true, "summary": "ok"}"""))
 
@@ -42,6 +46,22 @@ class ProfileTest {
         assertIs<ExecutionResult.Success>(
             run(Host(), "Sign in to the shop", { assertTrue("Signed out" in it.lastText, it.lastText).let { finish() } }),
         )
+    }
+
+    @Test
+    fun `Forget learned steps and sign out starts signed out and says so`() {
+        val task = Host()
+        val signIn: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
+        assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
+        task.statuses.clear()
+
+        assertIs<ExecutionResult.Success>(
+            run(task, "Sign in", { assertTrue("Signed out" in it.lastText, it.lastText).let { finish() } }, onNextStart = OnNextStart.ForgetStepsAndSignOut),
+        )
+        assertEquals("Forgot learned steps and sign-ins", task.statuses.first())
+        val message = task.notifications.last().message
+        assertTrue("Learned from scratch (reset at start)." in message, message)
+        assertFalse((task.statuses + message).any { "rofile" in it }, "user text names the profile")
     }
 }
 

@@ -32,7 +32,7 @@ class StatusLineTest {
                 "Step 1 of 40 · \$0.00 · Thinking…",
                 "Step 1 of 40 · \$0.01 · Clicking \"Long Nose Pliers\"",
                 "Step 2 of 40 · \$0.01 · Thinking…",
-                "Goal met",
+                "Yes.",
             ),
             host.statuses.distinct(), // the verdict is set twice: as status and as the notification headline
         )

@@ -22,13 +22,13 @@ class OnceGoalTest {
         runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(goal = goal, startUrl = site.url())) }
 
     @Test
-    fun `reaches the goal and notifies the verdict and summary`() {
+    fun `reaches the goal and the summary's first sentence is the headline`() {
         val model =
             ScriptedModel(
                 { call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""").let(::listOf) },
                 {
                     assertTrue("In stock" in it.lastText, "the click result carries a fresh snapshot")
-                    listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock at $14.15."}"""))
+                    listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock. It costs $14.15."}"""))
                 },
             )
 
@@ -37,8 +37,25 @@ class OnceGoalTest {
         assertIs<ExecutionResult.Success>(result)
         val notification = host.notifications.single()
         assertEquals("AI agent: Tell me whether Long Nose Pliers is in stock", notification.title)
-        assertEquals("Goal met\nLong Nose Pliers is in stock at $14.15.\nCost: $0.01", notification.message)
+        assertEquals("Long Nose Pliers is in stock.\nIt costs $14.15.\nCost: $0.01", notification.message)
         assertEquals(host.statuses.last(), notification.message.lines().first(), "the headline is the final status line")
+    }
+
+    @Test
+    fun `a goal not met opens with the model's answer, not Goal not met`() {
+        val result = run(ScriptedModel({ listOf(call("finish", """{"goal_met": false, "summary": "Long Nose Pliers is out of stock."}""")) }))
+
+        assertIs<ExecutionResult.Success>(result)
+        assertEquals("Long Nose Pliers is out of stock.", result.message)
+        assertEquals("Long Nose Pliers is out of stock.\nCost: $0.01", host.notifications.single().message)
+        assertEquals("Long Nose Pliers is out of stock.", host.statuses.last())
+    }
+
+    @Test
+    fun `the Once prompt asks for a one-sentence answer first`() {
+        val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) })
+        run(model)
+        assertTrue("Start summary with a one-sentence answer" in model.requests.first().text(), model.requests.first().text())
     }
 
     @Test

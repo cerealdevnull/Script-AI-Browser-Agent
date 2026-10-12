@@ -177,7 +177,7 @@ class G2LoginReadTest {
         val date = invoice["invoice_date"]!!.jsonPrimitive.content.substringBefore(' ')
         val total = money(invoice["total"]!!.jsonPrimitive.double)
         for (expected in listOf(number, date, total)) assertTrue(expected in message, "'$expected' (API: $invoice) missing from:\n$message")
-        assertTrue(message.startsWith("Goal met"), message)
+        assertTrue(!message.startsWith("Goal "), "the headline is the model's answer: $message")
         traffic.assertNeverContains(Demo.password, "the password")
         traffic.assertFallbacksAccepted()
     }

@@ -190,7 +190,7 @@ class HealTest {
         site.pages["product.html"] = "<html><body><div><h2>Pliers</h2><p>Price: \$15.00</p></div></body></html>"
         task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
-        assertEquals("Goal met\nPrice: Price: \$15.00\nFound it.\nCost: \$0.01 (the page changed, so it re-learned part of it)", host.notifications.last().message)
+        assertEquals("Found it.\nPrice: Price: \$15.00\nCost: \$0.01 (the page changed, so it re-learned part of it)", host.notifications.last().message)
         assertTrue(host.logs.any { "replay miss: readout 'Price' does not match exactly one node" in it }, host.logs.joinToString("\n"))
     }
 

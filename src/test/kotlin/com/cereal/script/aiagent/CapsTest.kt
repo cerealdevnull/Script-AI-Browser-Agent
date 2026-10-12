@@ -40,7 +40,7 @@ class CapsTest {
         )
         assertTrue(host.logs.any { it.startsWith("INFO now on ") && "product" in it }, host.logs.joinToString("\n"))
         assertTrue(host.logs.any { it.startsWith("INFO step 2: finish (") && it.endsWith("run total \$0.0120)") }, host.logs.joinToString("\n"))
-        assertTrue(host.logs.any { it == "INFO run: Once, learned, 2 steps, \$0.01, Goal met" }, host.logs.joinToString("\n"))
+        assertTrue(host.logs.any { it == "INFO run: Once, learned, 2 steps, \$0.01, In stock." }, host.logs.joinToString("\n"))
     }
 
     @Test
@@ -121,6 +121,6 @@ class CapsTest {
 
         run(model)
 
-        assertEquals("Goal met\nIn stock.\nCost: \$0", host.notifications.single().message)
+        assertEquals("In stock.\nCost: \$0", host.notifications.single().message)
     }
 }

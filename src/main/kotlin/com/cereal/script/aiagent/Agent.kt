@@ -661,7 +661,9 @@ class Agent(
                 "If the goal is a question, watch for the answer that makes it worth notifying, usually yes."
 
         private const val ONCE_MODE =
-            "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found."
+            "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found. " +
+                "Start summary with a one-sentence answer for the user, e.g. \"Long Nose Pliers is out of stock.\", " +
+                "\"Added to cart.\" or \"Couldn't add it: size 42 is sold out.\""
 
         private const val IRREVERSIBLE_ARGS =
             " irreversible: true when this step buys, pays, orders, deletes, sends or otherwise can't be undone (the user is asked to " +

@@ -13,8 +13,10 @@ import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Clock
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.UUID
 
 class AiAgentScript(
@@ -31,6 +33,13 @@ class AiAgentScript(
 
     // Repeat: runs (checks) since the task started, in memory like taskSpent.
     private var checks = 0
+
+    // Repeat: the day the task started, for the goal-met cost line; and whether the last check healed (one heal notice per streak).
+    private var startedOn = LocalDate.now(clock)
+    private var healing = false
+
+    // Models without a known price used this task start (the task total is then partly unknown).
+    private var taskUnpriced = setOf<String?>()
 
     // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
     private var scrubber: Scrubber? = null
@@ -55,6 +64,9 @@ class AiAgentScript(
         configError = validate(configuration)
         taskSpent = 0.0
         checks = 0
+        startedOn = LocalDate.now(clock)
+        healing = false
+        taskUnpriced = emptySet()
         scrubber = null
         transientFailures = 0
         checked = false
@@ -135,14 +147,9 @@ class AiAgentScript(
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
         var replayed = false
+        var cache: ReplayCache? = null
         val cost = {
-            val spent =
-                when {
-                    agent.unpricedModels.isEmpty() -> usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
-                    agent.cost == 0.0 -> "unknown (no price for ${agent.unpricedModels.joinToString()})"
-                    else -> "${usd(agent.cost)} + unknown"
-                }
-            "Cost: $spent" +
+            "Cost: ${spent(agent.cost, agent.unpricedModels)}" +
                 when {
                     repeat -> ""
                     agent.healed -> " (the page changed, so it re-learned part of it)"
@@ -153,7 +160,7 @@ class AiAgentScript(
         val outcome =
             try {
                 // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise it learns.
-                val cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
+                cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
                 replayed = cache != null
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
@@ -168,6 +175,7 @@ class AiAgentScript(
                 return report.error("Something went wrong inside the script.", "Start the task again. If it happens again, send the task log to the developer.", cost())
             } finally {
                 taskSpent += agent.cost
+                taskUnpriced += agent.unpricedModels
                 checks++
             }
         // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
@@ -220,13 +228,29 @@ class AiAgentScript(
             is Outcome.Stopped -> report.error(verdict, outcome.action, cost())
             // A No is a normal finish, not an Error; it ends a monitor too.
             is Outcome.Declined -> report.notify(verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
-            // A monitor stays quiet until the goal is met.
-            is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
+            // A monitor notifies only on change: a learned run that saved a condition, the first heal in a streak, goal met.
+            is Outcome.Finished if repeat && !outcome.goalMet -> {
+                val watching = outcome.check
+                when {
+                    watching == null -> {}
+                    !replayed ->
+                        notify(
+                            configuration,
+                            provider,
+                            scrubber.forLog("Watching: ${watching.words()}. I'll check every ${every(configuration.repeatInterval())} and notify you when it does. Later checks are free.\n${cost()}"),
+                        )
+                    !healing -> notify(configuration, provider, "The page changed, so I re-learned it for ${spent(agent.cost, agent.unpricedModels)}. Still watching.")
+                }
+                healing = agent.healed
+                ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
+            }
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
-                report.notify(verdict, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = cost())
+                val met = (outcome.check ?: cache?.check)?.takeIf { repeat }?.let { scrubber.forLog("Now holds: ${it.words()}") }
+                val total = "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}"
+                report.notify(met ?: verdict, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = if (repeat) total else cost())
                 // A Once run that answers "not met" still completed its job.
-                ExecutionResult.Success(verdict)
+                ExecutionResult.Success(met ?: verdict)
             }
         }
     }
@@ -435,3 +459,17 @@ private fun escapeHtml(s: String) =
 internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 
 private const val COST_ZERO = "Cost: \$0"
+
+/** A cost amount: `$0.21`, `$0`, `unknown (no price for x)` or `$0.12 + unknown`. */
+private fun spent(amount: Double, unpriced: Set<String?>) =
+    when {
+        unpriced.isEmpty() -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
+        amount == 0.0 -> "unknown (no price for ${unpriced.joinToString()})"
+        else -> "${usd(amount)} + unknown"
+    }
+
+/** A Repeat interval in words: `7 seconds`, `15 minutes`, `hour`. */
+private fun every(seconds: Int): String {
+    val (n, unit) = if (seconds % 3600 == 0) seconds / 3600 to "hour" else if (seconds % 60 == 0) seconds / 60 to "minute" else seconds to "second"
+    return if (n == 1) unit else "$n ${unit}s"
+}

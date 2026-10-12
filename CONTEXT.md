@@ -18,3 +18,5 @@
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
 - **run cap** / **task cap**: the step and dollar limits per goal run / per task.
+- **question goal**: a goal that asks for an answer ("tell me whether …"); suits Once. In Repeat it is read as the condition its worth-notifying answer states.
+- **condition goal**: a goal that states something that can become true ("notify me when … is in stock"); suits Repeat, which learns it as a Check.

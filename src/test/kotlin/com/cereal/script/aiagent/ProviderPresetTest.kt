@@ -28,6 +28,14 @@ class ProviderPresetTest {
     }
 
     @Test
+    fun `OpenRouter with an empty Model runs a priced Claude Sonnet 5_5 at OpenRouter`() {
+        val client = assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.OpenRouter, model = null, baseUrl = "http://x")))
+        assertEquals("https://openrouter.ai/api/v1", client.baseUrl)
+        assertEquals("anthropic/claude-sonnet-5.5", client.model)
+        assertEquals(Prices.cost("claude-sonnet-5-5", Usage(1, 1)), Prices.cost(client.model, Usage(1, 1)))
+    }
+
+    @Test
     fun `a chosen Model overrides the recommended one`() =
         assertEquals("gpt-5.6-sol", assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.OpenAI, model = "gpt-5.6-sol"))).model)
 

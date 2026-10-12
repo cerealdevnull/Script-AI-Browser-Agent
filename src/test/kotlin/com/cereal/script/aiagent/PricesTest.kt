@@ -13,6 +13,11 @@ class PricesTest {
     }
 
     @Test
+    fun `Sonnet 5_5 cache reads cost a tenth of a dollar per million`() {
+        assertEquals(0.10, Prices.cost("claude-sonnet-5-5", Usage(0, 0, 1_000_000))!!, 1e-9)
+    }
+
+    @Test
     fun `matches dated snapshots and provider-prefixed ids`() {
         assertEquals(10.0, Prices.cost("gpt-4o-2024-08-06", Usage(0, 1_000_000))!!, 1e-9)
         assertEquals(0.6, Prices.cost("gpt-4o-mini-2024-07-18", Usage(0, 1_000_000))!!, 1e-9)

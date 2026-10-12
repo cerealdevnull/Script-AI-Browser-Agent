@@ -125,6 +125,19 @@ class FailureTest {
     }
 
     @Test
+    fun `stuck on a sign-in page points at Forget learned steps and sign out`() {
+        val login: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Login")}}""")) }
+
+        run(ScriptedModel(*Array(7) { login }), startUrl = site.url("login.html"))
+
+        assertEquals(
+            "The agent got stuck repeating the same action on ${site.url("login.html")}.\n" +
+                "Pick “Forget learned steps and sign out” in On next start, then start the task again.\nCost: \$0.04",
+            host.notifications.single().message,
+        )
+    }
+
+    @Test
     fun `a page that never loads is a tool error first, then an Error when it repeats`() {
         val navigate: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("navigate", """{"url": "${site.url("never-loads.html")}"}""")) }
         val model =

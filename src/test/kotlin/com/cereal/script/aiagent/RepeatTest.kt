@@ -273,7 +273,7 @@ class RepeatTest {
     }
 
     @Test
-    fun `a heal that finds nothing to watch is a failed heal`() {
+    fun `a heal that finds nothing to watch is a failed heal that points at Forget learned steps`() {
         stock("Out of stock")
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) }, noCheck, noCheck, noCheck)
 
@@ -286,7 +286,10 @@ class RepeatTest {
         }
 
         assertEquals(5, model.requests.size)
-        assertFalse(host.notifications.last().message.contains("Reword"), host.notifications.toString())
+        assertEquals(
+            "Couldn't find something on the page to watch.\nPick “Forget learned steps” in On next start, then start the task again.\nCost: \$0.02",
+            host.notifications.last().message,
+        )
     }
 
     @Test

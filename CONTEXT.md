@@ -11,6 +11,7 @@
 - **miss**: replay can't continue (no unique fingerprint match, URL off pattern, Check/Readout target not found).
 - **heal**: the LLM resuming mid-run after a miss and rewriting the cache tail.
 - **Check**: a true/false condition on one element that replay evaluates without the LLM.
+- **numeric Check**: a Check that compares the one number in an element's text with a threshold (below, atMost, above, atLeast); zero or several numbers is a miss.
 - **Readout**: a labelled element whose text is reported verbatim.
 - **irreversible step**: an action that buys, pays, deletes, sends or similar; it needs a confirmation.
 - **confirmation**: the Confirm/Decline dialog shown before an irreversible step.

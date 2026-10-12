@@ -111,6 +111,29 @@ class FormLayoutTest {
         listOf("Secret", "Allowed domains", "On next start").forEach { assertTrue(it !in text, it) }
     }
 
+    @Test
+    fun `the store listing says what it does, what it costs, where to get a key and what to try`() {
+        val text = java.io.File("STORELISTING.md").readText()
+        val sections = listOf("## Getting started", "## Features", "## Use Cases", "## Requirements")
+        assertEquals(sections, sections.sortedBy { text.indexOf(it) }, text)
+        assertTrue(sections.all { it in text }, text)
+        fun section(name: String) = text.substringAfter(name).substringBefore("\n## ")
+        assertTrue((1..4).all { "\n$it. " in section("## Getting started") } && "\n5. " !in text, "4 numbered steps")
+        assertTrue(section("## Features").trim().lines().last().contains("Works with Anthropic or any OpenAI-compatible server"))
+        val useCases = section("## Use Cases").trim().lines()
+        assertEquals(4, useCases.size, useCases.toString())
+        assertTrue(useCases.all { "Once" in it || "Repeat" in it }, useCases.toString())
+        // The Goal field's example pair, word for word.
+        listOf("tell me whether Long Nose Pliers is in stock", "notify me when Long Nose Pliers is in stock").forEach { assertTrue(it in text, it) }
+        val requirements = section("## Requirements")
+        listOf(
+            "billed by your provider; about \$0.20 a run with the default model (an estimate); default limits are \$2 per run and \$5 per task, which you can change",
+            "or any OpenAI-compatible server, including local ones such as Ollama or LM Studio",
+        ).forEach { assertTrue(it in requirements, it) }
+        Provider.entries.mapNotNull { it.keyUrl }.forEach { assertTrue(it in requirements, it) }
+        assertTrue(Regex("\\bChecks?\\b").find(text) == null, "check is lower-case")
+    }
+
     private fun form(vararg values: Pair<String, ScriptConfigValue>) =
         object : ScriptConfig {
             override fun valueForKey(key: String): ScriptConfigValue = values.toMap()[key] ?: ScriptConfigValue.NullScriptConfigValue

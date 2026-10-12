@@ -6,6 +6,8 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Real Chrome against local fixture pages, with a scripted model. */
@@ -45,6 +47,16 @@ class OnceGoalTest {
         run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) }), goal)
 
         assertEquals("AI agent: Tell me whether Long Nose Pliers is in stock, and at what pr…", host.notifications.single().title)
+    }
+
+    @Test
+    fun `Telegram gets the message as plain text so a URL with an underscore is not dropped`() {
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "See https://shop.test/long_nose_pliers"}""")) }))
+
+        val notification = host.notifications.single()
+        val telegram = assertNotNull(notification.telegramMessage)
+        assertEquals(notification.message, telegram.text)
+        assertNull(telegram.parseMode, "no parse mode: Telegram sends it as plain text")
     }
 
     @Test

@@ -74,7 +74,7 @@ class FormLayoutTest {
         )
         assertTrue(items.getValue("maxTaskCost").description.endsWith("Resets when the task restarts."))
         listOf("maxSteps", "maxRunCost", "maxTaskCost").forEach {
-            assertEquals(com.cereal.sdk.statemodifier.DefaultStateModifier::class.java, items.getValue(it).stateModifier.java, it)
+            assertEquals(Visibility.VisibleOptional, items.getValue(it).stateModifier.objectInstance!!.getVisibility(form()), it)
         }
     }
 

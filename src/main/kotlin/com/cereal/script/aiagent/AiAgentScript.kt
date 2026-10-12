@@ -4,6 +4,7 @@ import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.Script
 import com.cereal.sdk.component.ComponentProvider
 import com.cereal.sdk.component.notification.Notification
+import com.cereal.sdk.component.notification.telegram.model.TelegramMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -225,7 +226,9 @@ class AiAgentScript(
 
     private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, body: String) {
         val goal = config.goal()
-        provider.notification().sendNotification(Notification("AI agent: " + if (goal.length > 60) goal.take(60) + "…" else goal, body))
+        val title = "AI agent: " + if (goal.length > 60) goal.take(60) + "…" else goal
+        // Plain Telegram text (no parse mode): Cereal's default Markdown drops a message with an unpaired `_` or `*`, e.g. in a URL.
+        provider.notification().sendNotification(Notification(title, body, telegramMessage = TelegramMessage(text = body)))
     }
 
     private fun validate(config: AgentConfiguration): String? {

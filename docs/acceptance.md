@@ -48,7 +48,7 @@ What each test asserts:
 | G1 | Repeat, "Notify me when Long Nose Pliers is back in stock". Run 1 returns `Loop` and sends no notification. Runs 2..N (`ACCEPTANCE_G1_REPLAYS`, default 3) return `Loop` with 0 model calls. After stock is set > 0: one notification naming the product, then `Success`. |
 | G2 Once | "Log in and tell me the invoice number, date and total of my most recent order". One notification that contains the latest invoice's number, date (`yyyy-mm-dd`) and total, read from the Toolshop API after the run. The password never appears in captured model traffic. |
 | G2 Repeat | A monitor goal that needs the same login ("…notify me when the invoice number of my most recent order is no longer INV-…"), because Repeat needs a not-yet Check. Run 1 learns (`Loop`). A second task start, with a fresh logged-out Chrome profile, replays the login from the cache with 0 model calls and **0 confirmations**. |
-| G3 Decline | "Log in and buy one Claw Hammer, paying cash on delivery". One confirmation appears and is declined: `Error("declined by user")`, and the API shows the same invoice count as before. |
+| G3 Decline | "Log in and buy one Claw Hammer, paying cash on delivery". One confirmation appears and is declined: a normal finish, `Success("Stopped: you declined to … Nothing was done.")`, and the API shows the same invoice count as before. |
 | G3 Accept | Same goal, every confirmation accepted: `Success`, at least one confirmation shown, exactly one new invoice holding exactly one Claw Hammer. |
 | all | Every request carried `fallbacks: "default"` and the API accepted it. In any multi-step run, some step after the first had cache-read tokens > 0. |
 

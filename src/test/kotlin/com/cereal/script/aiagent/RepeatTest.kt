@@ -240,8 +240,9 @@ class RepeatTest {
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, host.dialogs.size)
             val declined = execute()
-            assertIs<ExecutionResult.Error>(declined)
-            assertEquals("declined by user", declined.message)
+            // A No ends even a monitor as a normal finish.
+            assertIs<ExecutionResult.Success>(declined)
+            assertEquals("Stopped: you declined to place this order on 127.0.0.1. Nothing was done.", declined.message)
         }
 
         assertEquals(3, host.dialogs.size)

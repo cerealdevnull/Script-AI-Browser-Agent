@@ -76,6 +76,7 @@ class AiAgentScript(
                 scrubber,
                 configuration.allowedDomainSet(),
                 {
+                    log.info(scrubber.forLog("Asking to confirm: ${it.action} on ${it.element} at ${it.url}"))
                     statusUpdate(scrubber.forLog("Waiting for your confirmation: ${it.action} on ${it.element}"))
                     confirm(configuration, provider, scrubber, it)
                 },
@@ -170,20 +171,26 @@ class AiAgentScript(
         provider.preference().setString(key, ReplayCache(run.recorded, check, readouts).toJson())
     }
 
-    /** Notifies, then shows the Confirm / Decline dialog (no timeout). Closing it, or any dialog error, is a Decline. */
+    /** Notifies, then asks one plain question (no timeout). Closing the dialog, or any dialog error, is a No. */
     private suspend fun confirm(
         config: AgentConfiguration,
         provider: ComponentProvider,
         scrubber: Scrubber,
         step: Confirmation,
     ): Boolean {
-        notify(config, provider, scrubber.forLog("Confirmation needed: ${step.action} on ${step.element}"))
-        fun row(label: String, value: String) = "<tr><th>$label</th><td>${escapeHtml(scrubber.forLog(value))}</td></tr>"
+        notify(config, provider, scrubber.forLog("Confirmation needed: ${step.question}"))
+        fun esc(s: String) = escapeHtml(scrubber.forLog(s))
+        val does = step.text?.let { "It will send: “${esc(it.trim())}”" } ?: "It will press “${esc(step.label)}”."
+        val why = step.reason?.let(::esc) ?: "The agent gave no reason. It flagged this step because the button says “${esc(step.label)}”."
         val html =
-            "<!doctype html><html><body style=\"font-family: sans-serif\"><h2>Confirm this step?</h2><table>" +
-                row("Action", step.action) + row("Element", step.element) + row("Page", step.url) +
-                row("Reason", step.reason ?: "(none given)") +
-                "</table><p><a href=\"$CONFIRM_URL\">Confirm</a> &nbsp; <a href=\"$DECLINE_URL\">Decline</a></p></body></html>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"></head><body style=\"font-family: system-ui, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px\">" +
+                "<div style=\"font-size: 13px; color: #666\">AI Browser Agent · needs your OK</div>" +
+                "<h1>${esc(step.question)}</h1><p>$does</p>" +
+                "<p style=\"background: #f4f5f7; padding: 12px 16px; border-radius: 8px\">$why</p>" +
+                "<p style=\"display: flex; gap: 12px\"><a style=\"$BUTTON\" href=\"$DECLINE_URL\">No, stop here</a>" +
+                "<a style=\"$BUTTON\" href=\"$CONFIRM_URL\">Yes, ${esc(step.verb.replaceFirstChar(Char::lowercase))}</a></p>" +
+                "<p style=\"font-size: 13px; color: #666\">Closing this window, or leaving the Tasks screen, counts as No. The task waits until you answer.</p>" +
+                "</body></html>"
         return try {
             provider.userInteraction().showHtml("AI agent: confirm step", html) { it.url == CONFIRM_URL || it.url == DECLINE_URL }.url == CONFIRM_URL
         } catch (e: CancellationException) {
@@ -258,6 +265,7 @@ private fun modelClient(config: AgentConfiguration): ModelClient {
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
+private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 2px solid #c4c8cf; border-radius: 10px; font-weight: 600; text-decoration: none"
 
 private fun escapeHtml(s: String) =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")

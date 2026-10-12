@@ -153,10 +153,12 @@ class AnthropicClientTest {
             api.enqueue(MockResponse.Builder().code(429).addHeader("retry-after", "7").body("""{"error":{"message":"rate limited"}}""").build())
             api.enqueue(MockResponse.Builder().body(toolUseResponse).build())
 
-            val turn = client.send(request(Message.User("Goal: x")))
+            val retries = mutableListOf<Long>()
+            val turn = client.send(ModelRequest("system prompt", Agent.TOOLS, listOf(Message.User("Goal: x"))) { retries += it })
 
             assertEquals("click", turn.toolCalls.single().name)
             assertEquals(listOf(7_000L), sleeps)
+            assertEquals(listOf(7_000L), retries, "the wait is announced for the status line")
         }
 
     @Test

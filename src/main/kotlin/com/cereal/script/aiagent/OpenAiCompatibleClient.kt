@@ -52,7 +52,7 @@ class OpenAiCompatibleClient(
                 put("messages", JsonArray(if (claude) messages.mapIndexed { i, m -> if (i == 0 || i == messages.lastIndex) cached(m) else m } else messages))
             }
         val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
-        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body, sleep)
+        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body) { request.onRetry(it); sleep(it) }
         val choice = json["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: throw ModelException("Model error: no choices in response")
         val message = choice["message"] as? JsonObject ?: throw ModelException("Model error: no message in response")
         val usage = json["usage"] as? JsonObject

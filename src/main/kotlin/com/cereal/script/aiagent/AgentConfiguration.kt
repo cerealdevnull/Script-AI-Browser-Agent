@@ -124,7 +124,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret1Name",
         name = "Secret 1 label",
         description =
-            "What this is, in one word, e.g. email or password. Use the word in your goal (log in with my email and password) " +
+            "What this is, e.g. email or password. Use the same words in your goal (log in with my email and password) " +
                 "and the agent types the value for you. The AI never sees the value.",
         stateModifier = Secret1LabelState::class,
     )

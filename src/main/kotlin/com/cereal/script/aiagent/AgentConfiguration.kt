@@ -65,7 +65,8 @@ interface AgentConfiguration : ScriptConfiguration {
         name = "API key",
         description =
             "Your key from the provider above, sent only to them. Get one at: Anthropic https://console.anthropic.com/settings/keys · " +
-                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys. Optional for Custom.",
+                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys · " +
+                "OpenRouter https://openrouter.ai/settings/keys. Optional for Custom.",
         stateModifier = ApiKeyState::class,
     )
     fun apiKey(): Secret?
@@ -75,7 +76,8 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "model",
         name = "Model",
         description =
-            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna). " +
+            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna, " +
+                "OpenRouter: Claude Sonnet 5.5). " +
                 "Required for Custom.",
         stateModifier = ModelState::class,
     )
@@ -217,6 +219,7 @@ enum class Provider(val baseUrl: String?, val recommendedModel: String?) {
     Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5"),
     Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
     OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna"),
+    OpenRouter("https://openrouter.ai/api/v1", "anthropic/claude-sonnet-5.5"),
     Custom(null, null),
 }
 

@@ -44,7 +44,7 @@ class OpenAiCompatibleGoalTest {
         val result = runBlocking { host.run(AiAgentScript(profilesDir = tempProfiles()), config) }
 
         assertIs<ExecutionResult.Success>(result)
-        assertEquals("Long Nose Pliers is in stock.\nCost: $0", host.notifications.single().message)
+        assertEquals("Long Nose Pliers is in stock.\nCost: unknown (no price for llama3)", host.notifications.single().message)
         val requests = List(api.requestCount) { api.takeRequest() }
         assertEquals(listOf("/v1/models", "/v1/chat/completions", "/v1/chat/completions"), requests.map { it.url.encodedPath })
         requests.forEach { assertNull(it.headers["Authorization"]) }

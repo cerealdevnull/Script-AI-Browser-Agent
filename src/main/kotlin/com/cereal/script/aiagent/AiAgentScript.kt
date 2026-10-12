@@ -81,7 +81,8 @@ class AiAgentScript(
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
         val modelId = configuration.modelId()
-        if (!priceAnnounced && Prices.cost(modelId, Usage(0, 0)) == null) {
+        val modelPriced = Prices.cost(modelId, Usage(0, 0)) != null
+        if (!priceAnnounced && !modelPriced) {
             val line = "No price known for $modelId: the \$ caps can't stop this task, only Max steps can."
             log.warn(line)
             statusUpdate(line)
@@ -118,12 +119,18 @@ class AiAgentScript(
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
                 configuration.provider().let { if (it == Provider.Custom) "your server" else it.name },
+                modelPriced,
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
         var replayed = false
         val cost = {
-            val spent = usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
+            val spent =
+                when {
+                    agent.unpricedModels.isEmpty() -> usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
+                    agent.cost == 0.0 -> "unknown (no price for ${agent.unpricedModels.joinToString()})"
+                    else -> "${usd(agent.cost)} + unknown"
+                }
             "Cost: $spent" +
                 when {
                     repeat -> ""

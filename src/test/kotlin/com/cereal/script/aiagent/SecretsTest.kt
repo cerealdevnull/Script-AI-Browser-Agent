@@ -61,6 +61,22 @@ class SecretsTest {
     }
 
     @Test
+    fun `a failure reason that carries a typed secret is scrubbed from the logs and the result`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
+                { listOf(call("fail", """{"reason": "no account for $EMAIL"}""")) },
+            )
+
+        val result = run(model)
+
+        assertIs<ExecutionResult.Error>(result)
+        assertFalse(EMAIL in result.message, result.message)
+        assertFalse(host.logs.any { EMAIL in it }, host.logs.joinToString("\n"))
+        assertTrue(host.logs.any { "Failed: no account for {{secret:email}}" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
     fun `a secret longer than the snapshot's value cap never reaches the model, not even in part`() {
         val long = "x9" + "Q".repeat(60) + "tail-" + "Z".repeat(60)
         val model =

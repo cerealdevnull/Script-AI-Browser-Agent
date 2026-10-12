@@ -34,6 +34,14 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     private var names: Map<Int, String> = emptyMap() // ref -> role "name"
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
 
+    /** Bumped by each [snapshot] whose `[n]` refs point at other nodes than before: older `[n]` refs are stale. */
+    var refsVersion = 0
+        private set
+
+    /** The same for `[tN]` refs (typing into a field already adds a text node). */
+    var textRefsVersion = 0
+        private set
+
     suspend fun url(): String = (tab.rawEvaluate("location.href") as? JsonPrimitive)?.contentOrNull ?: "?"
 
     suspend fun title(): String = (tab.rawEvaluate("document.title") as? JsonPrimitive)?.contentOrNull.orEmpty()
@@ -175,6 +183,8 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             node.childIds?.forEach { walk(it, childDepth, name.ifEmpty { parentName }) }
         }
         nodes.firstOrNull { it.parentId == null }?.let { walk(it.nodeId, 0, "") }
+        if (newRefs != refs) refsVersion++
+        if (newTextRefs != textRefs) textRefsVersion++
         refs = newRefs
         names = newNames
         textRefs = newTextRefs

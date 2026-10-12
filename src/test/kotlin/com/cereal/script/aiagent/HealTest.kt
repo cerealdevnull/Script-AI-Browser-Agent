@@ -265,6 +265,24 @@ class HealTest {
     }
 
     @Test
+    fun `a heal after the Check's target is gone does not cache that Check again`() {
+        val price: suspend (ModelRequest) -> List<ToolCall> = {
+            val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", "Price: \$15.00")}", "value": "Price: ${'$'}15.00"}"""
+            listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": [$readout], "check": null}"""))
+        }
+        val model = learning(price)
+
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        site.pages["product.html"] = "<html><body><div><h2>Pliers</h2><p>In stock</p><p>Price: \$15.00</p></div></body></html>"
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        assertEquals(4, model.requests.size)
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+
+        assertEquals(4, model.requests.size, "the run after the heal replays, not misses on the old Check again")
+        assertTrue(host.logs.any { "replay miss: the check's target does not match exactly one node" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
     fun `a heal that hits a cap leaves the cache as it was`() {
         task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         val learned = cacheSteps()

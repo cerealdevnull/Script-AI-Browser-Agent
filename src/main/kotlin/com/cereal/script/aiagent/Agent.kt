@@ -100,6 +100,10 @@ class Agent(
     var healed = false
         private set
 
+    /** True when the replay missed because the cached Check's target is gone: that Check must not be cached again. */
+    var checkMissed = false
+        private set
+
     /** [resume]: set when healing a replay miss; the run then continues on the current page instead of the start URL. */
     suspend fun run(resume: String? = null): Outcome {
         val current =
@@ -150,11 +154,18 @@ class Agent(
             if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
 
             val results = mutableListOf<ToolResult>()
+            // The refs the model saw; an earlier call in this turn may have taken a snapshot that renumbered them.
+            val versions = browser.refsVersion to browser.textRefsVersion
             for ((i, call) in turn.toolCalls.withIndex()) {
                 val error = validate(call)
                 if (error != null) {
                     warn("step $steps: ${call.name} has invalid arguments: $error")
                     results += ToolResult(call.id, "invalid arguments: $error", isError = true)
+                    continue
+                }
+                if (staleRefs(call, versions)) {
+                    warn("step $steps: ${actions[i]} not run: an earlier action in this step changed the refs")
+                    results += ToolResult(call.id, STALE_REFS, isError = true)
                     continue
                 }
                 when (call.name) {
@@ -219,6 +230,13 @@ class Agent(
             caps.taskSpent + cost >= caps.maxTaskCost -> "max \$ per task (${usd(caps.maxTaskCost)})"
             else -> null
         }
+
+    /** True when [call] uses refs of a kind an earlier action in this step renumbered; [seen]: the ref versions the model saw. */
+    private fun staleRefs(call: ToolCall, seen: Pair<Int, Int>): Boolean {
+        val refsChanged = browser.refsVersion != seen.first
+        val finishRefs = (call.args["readouts"] as? JsonArray).orEmpty().isNotEmpty() || call.args["check"] is JsonObject
+        return ("ref" in call.args && refsChanged) || (finishRefs && (refsChanged || browser.textRefsVersion != seen.second))
+    }
 
     /** What makes two actions "the same" for stuck detection: page, tool, target (by fingerprint, not ref) and args. */
     private suspend fun actionKey(call: ToolCall): String {
@@ -377,7 +395,13 @@ class Agent(
                 status("Replay: checking the result")
                 at = "the check"
                 failed = at
-                val goalMet = cache.check?.let { it.evaluate(browser) ?: throw Miss("the check's target does not match exactly one node", "the check's target is gone") } ?: true
+                val goalMet =
+                    cache.check?.let {
+                        it.evaluate(browser) ?: run {
+                            checkMissed = true
+                            throw Miss("the check's target does not match exactly one node", "the check's target is gone")
+                        }
+                    } ?: true
                 val readouts =
                     cache.readouts.map { r ->
                         at = "readout '${r.label}'"
@@ -500,10 +524,13 @@ class Agent(
 
     private class DeclinedException : Exception("declined by user")
 
-    /** Never-do: no typing into password, email or card fields on an account-settings page. */
+    /**
+     * Never-do: no typing into password, email or card fields on an account-settings page. A form submitted by e.g.
+     * "Log in" is a sign-in form, also on an account page (WooCommerce signs in on /my-account/).
+     */
     private suspend fun refusingAccountSettings(ref: Int): Int {
         val page = "${runCatching { URI(browser.url()).path }.getOrNull().orEmpty()} ${browser.title()}".lowercase()
-        val accountSettings = ACCOUNT_PAGE.containsMatchIn(page) && !SIGN_IN_PAGE.containsMatchIn(page)
+        val accountSettings = ACCOUNT_PAGE.containsMatchIn(page) && !SIGN_IN_PAGE.containsMatchIn("$page ${browser.form(ref).submitName.lowercase()}")
         require(!(accountSettings && browser.isSensitiveField(ref))) {
             "never allowed: typing into a password, email or card field on an account-settings page"
         }
@@ -528,6 +555,9 @@ class Agent(
         private const val REPEATING =
             "error: you are repeating the same action ($STUCK_REPEATS times on this page, same target and arguments). " +
                 "If the information isn't on the page, call fail."
+        private const val STALE_REFS =
+            "not run: an earlier action in this step changed the page, so the refs you used are stale. " +
+                "Use refs from the latest snapshot."
         private val WHITESPACE = Regex("\\s+")
         private val TEXT_REF = Regex("t\\d+")
         private const val MAX_WAIT_SECONDS = 10

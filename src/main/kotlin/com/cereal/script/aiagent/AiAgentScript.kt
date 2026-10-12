@@ -96,7 +96,7 @@ class AiAgentScript(
                 replayed = cache != null
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
-                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check) { m -> log.info(scrubber.forLog(m)) }
+                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -108,19 +108,22 @@ class AiAgentScript(
             } finally {
                 taskSpent += agent.cost
             }
+        // Scrubbed once: a failure reason can carry a revealed secret (e.g. in a URL that did not load).
         val verdict =
-            when (outcome) {
-                is Outcome.Failed -> "Failed: ${outcome.reason}"
-                is Outcome.Stopped -> "Stopped: ${outcome.reason}"
-                is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
-                is Outcome.Declined -> "Declined by user"
-            }
-        statusUpdate(scrubber.forLog(verdict))
+            scrubber.forLog(
+                when (outcome) {
+                    is Outcome.Failed -> "Failed: ${outcome.reason}"
+                    is Outcome.Stopped -> "Stopped: ${outcome.reason}"
+                    is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
+                    is Outcome.Declined -> "Declined by user"
+                },
+            )
+        statusUpdate(verdict)
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
-            log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
+            log.warn("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict")
             return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
         }
         return when (outcome) {
@@ -155,7 +158,7 @@ class AiAgentScript(
     /**
      * Stores what a finished learned or healed run can replay. Not when the Check or Readouts failed validation; a run
      * that found the goal already met can't show its Check tells met from not met, so it keeps the [cached] Check (a
-     * heal's) or none (a learned run's); a Once run needs a Check or a Readout.
+     * heal's, unless that Check just missed) or none (a learned run's); a Once run needs a Check or a Readout.
      */
     private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, cached: Check?, log: (String) -> Unit) {
         val check = if (run.goalMet) cached else run.check
@@ -214,7 +217,7 @@ class AiAgentScript(
         return when {
             config.goal().isBlank() -> "Goal is required"
             config.startUrl().isBlank() -> "Start URL is required"
-            scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
+            (scheme != "http" && scheme != "https") || hostOf(config.startUrl().trim()) == null -> "Start URL must be an http(s) URL"
             config.provider() == Provider.Anthropic && config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
             config.model().isBlank() -> "Model is required"
             config.maxSteps() <= 0 -> "Max steps per run must be > 0"

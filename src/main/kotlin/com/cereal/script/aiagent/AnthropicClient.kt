@@ -52,7 +52,7 @@ class AnthropicClient(
                 "${baseUrl.trimEnd('/')}/v1/messages",
                 mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01", "anthropic-beta" to "server-side-fallback-2026-07-01"),
                 body,
-                sleep,
+                { request.onRetry(it); sleep(it) },
             )
         val content = json["content"]?.jsonArray ?: JsonArray(emptyList())
         val blocks = content.map { it.jsonObject }

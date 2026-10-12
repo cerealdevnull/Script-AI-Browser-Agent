@@ -22,19 +22,19 @@ class ConfigValidationTest {
     fun `missing API key`() = assertRejected(TestConfig(apiKey = null), "API key is required for Anthropic")
 
     @Test
-    fun `secret names must be unique`() =
+    fun `secret labels must be unique, ignoring case and spaces around them`() =
         assertRejected(
-            TestConfig(secrets = listOf("email" to Secret("a"), "email" to Secret("b"))),
-            "Secret names must be unique: email",
+            TestConfig(secrets = listOf("Email" to Secret("a"), " email " to Secret("b"))),
+            "The label 'email' is already used by another secret",
         )
 
     @Test
-    fun `secret names must be lowercase identifiers`() =
-        assertRejected(TestConfig(secrets = listOf("E-mail" to Secret("a"))), "Secret 1 name must match [a-z][a-z0-9_]*")
+    fun `a secret value needs a label`() =
+        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Give this value a label, e.g. password")
 
     @Test
-    fun `a secret value needs a name`() =
-        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Secret 2 has a value but no name")
+    fun `a secret label needs a value`() =
+        assertRejected(TestConfig(secrets = listOf("Email" to null)), "Enter the value for 'Email'")
 
     @Test
     fun `step cap must be positive`() = assertRejected(TestConfig(maxSteps = 0), "Max steps per run must be > 0")

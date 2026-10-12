@@ -129,8 +129,9 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret1Name",
         name = "Secret 1 label",
         description =
-            "What this is, in one word, e.g. email or password. Use the word in your goal (log in with my email and password) " +
+            "What this is, e.g. email or password. Use the same words in your goal (log in with my email and password) " +
                 "and the agent types the value for you. The AI never sees the value.",
+        stateModifier = Secret1LabelState::class,
     )
     fun secret1Name(): String?
 
@@ -139,6 +140,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret1Value",
         name = "Secret 1 value",
         description = "The value itself, e.g. your password. Hidden from the AI and the logs.",
+        stateModifier = Secret1ValueState::class,
     )
     fun secret1Value(): Secret?
 
@@ -147,7 +149,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret2Name",
         name = "Secret 2 label",
         description = "Another word, e.g. password.",
-        stateModifier = Secret2State::class,
+        stateModifier = Secret2LabelState::class,
     )
     fun secret2Name(): String?
 
@@ -156,7 +158,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret2Value",
         name = "Secret 2 value",
         description = "The value itself. Hidden from the AI and the logs.",
-        stateModifier = Secret2State::class,
+        stateModifier = Secret2ValueState::class,
     )
     fun secret2Value(): Secret?
 
@@ -165,7 +167,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret3Name",
         name = "Secret 3 label",
         description = "Another word, e.g. password.",
-        stateModifier = Secret3State::class,
+        stateModifier = Secret3LabelState::class,
     )
     fun secret3Name(): String?
 
@@ -174,7 +176,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "secret3Value",
         name = "Secret 3 value",
         description = "The value itself. Hidden from the AI and the logs.",
-        stateModifier = Secret3State::class,
+        stateModifier = Secret3ValueState::class,
     )
     fun secret3Value(): Secret?
 
@@ -241,14 +243,40 @@ fun serverUrlError(provider: Provider, baseUrl: String?) = if (provider == Provi
 
 fun positiveError(name: String, value: Number?) = if (value != null && value.toDouble() <= 0) "$name must be > 0" else null
 
-/** Slots 1..3 as (name, value); blank counts as empty. */
-fun AgentConfiguration.secretSlots(): List<Pair<String?, Secret?>> =
-    listOf(secret1Name() to secret1Value(), secret2Name() to secret2Value(), secret3Name() to secret3Value())
-        .map { (name, value) -> name?.trim()?.ifEmpty { null } to value?.takeIf { it.reveal().isNotEmpty() } }
+/** One slot as (trimmed label, value); blank counts as empty. */
+private fun slot(label: String?, value: Secret?) = label?.trim()?.ifEmpty { null } to value?.takeIf { it.reveal().isNotEmpty() }
 
-/** The usable secrets by name: slots with both a name and a value. */
+/** Slots 1..3 as (label, value). */
+fun AgentConfiguration.secretSlots(): List<Pair<String?, Secret?>> =
+    listOf(slot(secret1Name(), secret1Value()), slot(secret2Name(), secret2Value()), slot(secret3Name(), secret3Value()))
+
+/** The form's slots 1..3, read the same way at Save. */
+private fun ScriptConfig.secretSlots(): List<Pair<String?, Secret?>> =
+    (1..3).map { n ->
+        slot(
+            (valueForKey("secret${n}Name") as? ScriptConfigValue.StringScriptConfigValue)?.value,
+            (valueForKey("secret${n}Value") as? ScriptConfigValue.SecretScriptConfigValue)?.value,
+        )
+    }
+
+/** The name the agent knows a label by: lowercase, spaces to `_` ("My Password" is `my_password`). */
+fun secretName(label: String) = label.trim().lowercase().replace(Regex("\\s+"), "_")
+
+/** The usable secrets by name: slots with both a label and a value. */
 fun AgentConfiguration.secrets(): Map<String, Secret> =
-    secretSlots().mapNotNull { (name, value) -> if (name != null && value != null) name to value else null }.toMap()
+    secretSlots().mapNotNull { (label, value) -> if (label != null && value != null) secretName(label) to value else null }.toMap()
+
+/** Slot [i]'s errors as (under its label, under its value). */
+fun secretSlotErrors(slots: List<Pair<String?, Secret?>>, i: Int): Pair<String?, String?> {
+    val (label, value) = slots[i]
+    val labelError =
+        when {
+            label == null -> if (value != null) "Give this value a label, e.g. password" else null
+            slots.take(i).any { (other) -> other != null && secretName(other) == secretName(label) } -> "The label '$label' is already used by another secret"
+            else -> null
+        }
+    return labelError to if (label != null && value == null) "Enter the value for '$label'" else null
+}
 
 enum class RunMode { Once, Repeat }
 
@@ -319,14 +347,26 @@ object CheckEveryState : StateModifier {
     override fun getError(config: ScriptConfig) = if (repeat(config)) positiveError("Check every", config.number("repeatInterval")) else null
 }
 
-/** Secret slot N shows once slot N-1 has a label. */
-abstract class NextSecretState(private val previousLabelKey: String) : StateModifier {
+/** Secret slot N shows once slot N-1 has a label; its errors show under the label or the value field. */
+abstract class SecretState(private val slot: Int, private val onValue: Boolean) : StateModifier {
     override fun getVisibility(config: ScriptConfig) =
-        if ((config.valueForKey(previousLabelKey) as? ScriptConfigValue.StringScriptConfigValue)?.value.isNullOrBlank()) Visibility.Hidden else Visibility.VisibleOptional
+        if (slot == 0 || config.secretSlots()[slot - 1].first != null) Visibility.VisibleOptional else Visibility.Hidden
 
-    override fun getError(config: ScriptConfig): String? = null
+    override fun getError(config: ScriptConfig): String? {
+        if (getVisibility(config) == Visibility.Hidden) return null
+        val (labelError, valueError) = secretSlotErrors(config.secretSlots(), slot)
+        return if (onValue) valueError else labelError
+    }
 }
 
-object Secret2State : NextSecretState("secret1Name")
+object Secret1LabelState : SecretState(0, false)
 
-object Secret3State : NextSecretState("secret2Name")
+object Secret1ValueState : SecretState(0, true)
+
+object Secret2LabelState : SecretState(1, false)
+
+object Secret2ValueState : SecretState(1, true)
+
+object Secret3LabelState : SecretState(2, false)
+
+object Secret3ValueState : SecretState(2, true)

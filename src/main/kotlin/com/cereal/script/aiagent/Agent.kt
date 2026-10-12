@@ -118,6 +118,8 @@ class Agent(
     private val status: suspend (String) -> Unit = {},
     /** Who serves the model, as user text names it: "Anthropic", "your server". */
     private val providerName: String = "the model provider",
+    /** The configured model has a price; false shows `$?` from the first status line. */
+    private val modelPriced: Boolean = true,
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
@@ -128,6 +130,9 @@ class Agent(
     /** Dollars spent by this run so far. */
     var cost = 0.0
         private set
+
+    /** Models that answered a step with no known price; [cost] counts only the priced steps. */
+    val unpricedModels: Set<String?> get() = unpriced
     private var finishRejections = 0
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
@@ -271,7 +276,15 @@ class Agent(
     }
 
     /** The status line's prefix: progress and cost first, because the host cuts the line from the right. */
-    private fun progress(step: Int) = (if (healed) "Recovering · " else "") + "Step $step of ${caps.maxSteps} · ${usd(cost)}"
+    private fun progress(step: Int) = (if (healed) "Recovering · " else "") + "Step $step of ${caps.maxSteps} · ${spent()}"
+
+    /** `$0.12`; `$?` when no step had a price; `$0.12 + unknown` when only some did. */
+    private fun spent() =
+        when {
+            unpriced.isEmpty() && modelPriced -> usd(cost)
+            cost == 0.0 -> "\$?"
+            else -> "${usd(cost)} + unknown"
+        }
 
     /** What a step does, in plain words for the status line: `Clicking "Pliers"`. Never a tool name or a secret value. */
     private fun activity(call: ToolCall): String {

@@ -61,6 +61,34 @@ class SecretsTest {
     }
 
     @Test
+    fun `a label is a free word the agent knows by its lowercase name`() {
+        val model =
+            ScriptedModel(
+                {
+                    assertTrue("type_secret (by name): email, my_password" in it.lastText, it.lastText)
+                    listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}"""))
+                },
+                {
+                    assertTrue("{{secret:email}}" in it.lastText, it.lastText)
+                    listOf(call("fail", """{"reason": "x"}"""))
+                },
+            )
+
+        runBlocking {
+            host.run(
+                AiAgentScript({ model }, tempProfiles()),
+                TestConfig(
+                    goal = "Log in with my email",
+                    startUrl = site.url("login.html"),
+                    secrets = listOf(" Email " to Secret(EMAIL), "My Password" to Secret(PASSWORD)),
+                ),
+            )
+        }
+
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
     fun `a secret longer than the snapshot's value cap never reaches the model, not even in part`() {
         val long = "x9" + "Q".repeat(60) + "tail-" + "Z".repeat(60)
         val model =

@@ -80,7 +80,8 @@ class AiAgentScript(
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
         val modelId = configuration.modelId()
-        if (!priceAnnounced && Prices.cost(modelId, Usage(0, 0)) == null) {
+        val modelPriced = Prices.cost(modelId, Usage(0, 0)) != null
+        if (!priceAnnounced && !modelPriced) {
             val line = "No price known for $modelId: the \$ caps can't stop this task, only Max steps can."
             log.warn(line)
             statusUpdate(line)
@@ -117,12 +118,18 @@ class AiAgentScript(
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
                 configuration.provider().let { if (it == Provider.Custom) "your server" else it.name },
+                modelPriced,
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
         var replayed = false
         val cost = {
-            val spent = usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
+            val spent =
+                when {
+                    agent.unpricedModels.isEmpty() -> usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
+                    agent.cost == 0.0 -> "unknown (no price for ${agent.unpricedModels.joinToString()})"
+                    else -> "${usd(agent.cost)} + unknown"
+                }
             "Cost: $spent" +
                 when {
                     repeat -> ""
@@ -329,12 +336,7 @@ class AiAgentScript(
 
     private fun validateSecrets(config: AgentConfiguration): String? {
         val slots = config.secretSlots()
-        slots.forEachIndexed { i, (name, value) ->
-            if (name != null && !SECRET_NAME.matches(name)) return "Secret ${i + 1} name must match ${SECRET_NAME.pattern}"
-            if (name == null && value != null) return "Secret ${i + 1} has a value but no name"
-        }
-        val names = slots.mapNotNull { it.first }
-        return names.groupBy { it }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { "Secret names must be unique: $it" }
+        return slots.indices.firstNotNullOfOrNull { i -> secretSlotErrors(slots, i).let { it.first ?: it.second } }
     }
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
@@ -379,8 +381,6 @@ private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 
 
 private fun escapeHtml(s: String) =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
-
-private val SECRET_NAME = Regex("[a-z][a-z0-9_]*")
 
 internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 

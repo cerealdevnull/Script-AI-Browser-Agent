@@ -18,7 +18,7 @@ object Prices {
             "claude-opus-4-8" to claude(5.0, 25.0),
             "claude-opus-4-7" to claude(5.0, 25.0),
             "claude-opus-4-6" to claude(5.0, 25.0),
-            "claude-sonnet-5-5" to claude(2.0, 10.0, 0.20),
+            "claude-sonnet-5-5" to claude(2.0, 10.0, 0.10),
             "claude-sonnet-5" to claude(2.0, 10.0),
             "claude-sonnet-4-6" to claude(3.0, 15.0),
             // ponytail: Haiku 5.5's > 100K-token prompt rate ($0.50 / $2.50) is ignored; snapshots stay well below it.
@@ -56,9 +56,10 @@ object Prices {
     /**
      * Dollars for one call by [model] (the response's model id), or null when the table doesn't know it. Accepts a
      * `provider/` prefix (OpenRouter) and a `-<snapshot>` suffix (`gpt-4o-2024-08-06`); the longest matching id wins.
+     * OpenRouter writes Claude versions with a dot (`anthropic/claude-sonnet-5.5`); Anthropic's ids use a dash.
      */
     fun cost(model: String?, usage: Usage): Double? {
-        val id = model?.substringAfterLast('/') ?: return null
+        val id = model?.substringAfterLast('/')?.let { if (it.startsWith("claude-")) it.replace('.', '-') else it } ?: return null
         val price = table.entries.filter { id == it.key || id.startsWith(it.key + "-") }.maxByOrNull { it.key.length }?.value ?: return null
         return (usage.input * price.input + usage.output * price.output + usage.cacheRead * price.cacheRead + usage.cacheWrite * price.cacheWrite) / 1e6
     }

@@ -238,7 +238,13 @@ class Agent(
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
                 if (seen >= 2 * STUCK_REPEATS) {
                     val page = runCatching { browser.url() }.getOrNull() ?: lastUrl ?: startUrl
-                    return Outcome.Failed("The agent got stuck repeating the same action on $page.", steps, "Make the goal more specific, then start the task again.")
+                    // Stuck signing in: a stale or wrong-account sign-in is likely, so point at the reset that signs out.
+                    val signIn = SIGN_IN_PAGE.containsMatchIn("${runCatching { URI(page).path }.getOrNull().orEmpty()} ${runCatching { browser.title() }.getOrNull().orEmpty()}".lowercase())
+                    return Outcome.Failed(
+                        "The agent got stuck repeating the same action on $page.",
+                        steps,
+                        if (signIn) FORGET_AND_SIGN_OUT else "Make the goal more specific, then start the task again.",
+                    )
                 }
                 val target =
                     (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let {

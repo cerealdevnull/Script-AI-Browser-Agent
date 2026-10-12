@@ -135,6 +135,8 @@ class AiAgentScript(
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
         var replayed = false
+        // A replay that ends not met where the learned run met it: the learned steps likely no longer fit.
+        var learnedMet = false
         val cost = {
             val spent =
                 when {
@@ -155,6 +157,7 @@ class AiAgentScript(
                 // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise it learns.
                 val cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
                 replayed = cache != null
+                learnedMet = cache?.met == true
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
                     if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check) { m -> log.info(scrubber.forLog(m)) }
@@ -196,9 +199,9 @@ class AiAgentScript(
                 if (repeat) ", check $checks" else "",
         )
         // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
-        // A heal is a failed heal (no new message); a learned run asks for a reworded goal.
+        // A heal is a failed heal: the learned steps no longer fit; a learned run asks for a reworded goal.
         if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed)) {
-            return report.error(NOTHING_TO_WATCH, REWORD.takeUnless { agent.healed }, cost = cost())
+            return report.error(NOTHING_TO_WATCH, if (agent.healed) FORGET_STEPS else REWORD, cost = cost())
         }
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
@@ -224,7 +227,8 @@ class AiAgentScript(
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
-                report.notify(verdict, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = cost())
+                val stale = replayed && !outcome.goalMet && learnedMet
+                report.notify(verdict, FORGET_STEPS.takeIf { stale }, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }
@@ -294,7 +298,7 @@ class AiAgentScript(
             }
         if (skipped != null) return log("replay cache not written: $skipped")
         val readouts = run.readouts.map { CachedReadout(it.label, it.fingerprint.json) }
-        provider.preference().setString(key, ReplayCache(run.recorded, check, readouts).toJson())
+        provider.preference().setString(key, ReplayCache(run.recorded, check, readouts, run.goalMet).toJson())
     }
 
     /** Notifies, then asks one plain question (no timeout). Closing the dialog, or any dialog error, is a No. */
@@ -422,6 +426,8 @@ private fun keyRejected(config: AgentConfiguration): String {
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
+internal const val FORGET_STEPS = "Pick “Forget learned steps” in On next start, then start the task again."
+internal const val FORGET_AND_SIGN_OUT = "Pick “Forget learned steps and sign out” in On next start, then start the task again."
 private const val TASK_ID_KEY = "taskId"
 private const val ON_NEXT_START_KEY = "onNextStart"
 private const val LEARNED_FROM_SCRATCH = "Learned from scratch (reset at start)."

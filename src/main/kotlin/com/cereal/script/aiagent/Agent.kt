@@ -44,10 +44,11 @@ sealed interface Outcome {
     ) : Outcome
 
     /**
+     * [startPage]: the start URL didn't load, so no step ran.
      * [transient]: a page load, network or model 429/5xx failure that outlasted its retries; a later attempt may work.
      * Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
      */
-    class Failed(val reason: String, override val steps: Int, val transient: Boolean = false) : Outcome
+    class Failed(val reason: String, override val steps: Int, val transient: Boolean = false, val startPage: Boolean = false) : Outcome
 
     /** A step or cost cap was hit. */
     class Stopped(val reason: String, override val steps: Int) : Outcome
@@ -128,6 +129,9 @@ class Agent(
     var healed = false
         private set
 
+    /** The start page didn't load: nothing to show the model, so the run ends before step 1. */
+    private fun startFailed(e: PageLoadException) = Outcome.Failed("Couldn't open $startUrl (${e.message}). Check the Start URL.", 0, transient = true, startPage = true)
+
     /** [resume]: set when healing a replay miss; the run then continues on the current page instead of the start URL. */
     suspend fun run(resume: String? = null): Outcome {
         val current =
@@ -140,8 +144,7 @@ class Agent(
                 lastUrl = browser.url()
                 "Current page:"
             } catch (e: PageLoadException) {
-                loadFailure = "navigate" + JsonObject(mapOf("url" to JsonPrimitive(startUrl)))
-                "Current page (error: ${e.message}):"
+                return startFailed(e)
             }
         messages +=
             Message.User(
@@ -383,7 +386,11 @@ class Agent(
         var done = emptyList<Step>()
         val miss =
             try {
-                browser.navigate(startUrl)
+                try {
+                    browser.navigate(startUrl)
+                } catch (e: PageLoadException) {
+                    return startFailed(e)
+                }
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"

@@ -271,7 +271,10 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             tab.waitForReadyState(ReadyState.COMPLETE, pageLoadTimeoutMs)
         } ?: throw PageLoadException("${url()} did not finish loading within ${pageLoadTimeoutMs / 1000} s")
         delay(300)
-        if (url().startsWith("chrome-error:")) throw PageLoadException("network error: the page could not be loaded")
+        if (url().startsWith("chrome-error:")) {
+            val code = (tab.rawEvaluate("document.querySelector('.error-code')?.textContent || ''") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            throw PageLoadException(if ("NAME_NOT_RESOLVED" in code || "NXDOMAIN" in code) "site not found" else "network error: the page could not be loaded")
+        }
     }
 
     companion object {

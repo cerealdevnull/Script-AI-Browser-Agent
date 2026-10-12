@@ -90,7 +90,7 @@ class ScriptJarTest {
                 }
 
                 assertEquals(2, api.requestCount)
-                assertEquals("Goal met\nreplayed, $0", host.notifications.single().message)
+                assertEquals("Goal met\nCost: $0", host.notifications.single().message)
             }
         }
     }

@@ -30,7 +30,7 @@ class FailureTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key", result.message)
-        assertEquals("Failed: Model/API key rejected: HTTP 401: invalid x-api-key\n0 steps, \$0.00", host.notifications.single().message)
+        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key\nCost: \$0", host.notifications.single().message)
     }
 
     @Test
@@ -45,7 +45,7 @@ class FailureTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Model refused: I can't help with that.", result.message)
-        assertEquals("Failed: Model refused: I can't help with that.\n1 step, \$0.01", host.notifications.single().message)
+        assertEquals("Model refused: I can't help with that.\nCost: \$0.01", host.notifications.single().message)
     }
 
     @Test
@@ -61,7 +61,7 @@ class FailureTest {
         assertIs<ExecutionResult.Error>(result)
         assertEquals("stuck: repeating the same action", result.message)
         assertEquals(6, model.requests.size)
-        assertEquals("Failed: stuck: repeating the same action\n6 steps, \$0.04", host.notifications.single().message)
+        assertEquals("stuck: repeating the same action\nCost: \$0.04", host.notifications.single().message)
     }
 
     @Test
@@ -84,6 +84,6 @@ class FailureTest {
         assertIs<ExecutionResult.Error>(result)
         assertTrue(result.message.startsWith("Page load failed: "), result.message)
         assertEquals(2, model.requests.size)
-        assertTrue(host.notifications.single().message.endsWith("\n2 steps, \$0.01"))
+        assertTrue(host.notifications.single().message.endsWith("\nCost: \$0.01"))
     }
 }

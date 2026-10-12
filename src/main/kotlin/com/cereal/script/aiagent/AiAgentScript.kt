@@ -389,21 +389,23 @@ class AiAgentScript(
         provider.notification().sendNotification(Notification(title, body, telegramMessage = TelegramMessage(text = body)))
     }
 
-    private fun validate(config: AgentConfiguration): String? =
-        goalError(config.goal())
-            ?: startUrlError(config.startUrl())
-            ?: apiKeyError(config.provider(), config.apiKey()?.reveal())
-            ?: modelError(config.provider(), config.model())
-            ?: serverUrlError(config.provider(), config.baseUrl())
-            ?: positiveError("Max steps per run", config.maxSteps())
-            ?: positiveError("Max \$ per run", config.maxRunCost())
-            ?: positiveError("Max \$ per task", config.maxTaskCost())
-            ?: positiveError("Check every", config.repeatInterval())
-            ?: validateSecrets(config)
-
-    private fun validateSecrets(config: AgentConfiguration): String? {
+    // Every error at once, in the words shown at Save. ponytail: upgrade to a host onStart message if Cereal ships one (Ask 8).
+    private fun validate(config: AgentConfiguration): String? {
         val slots = config.secretSlots()
-        return slots.indices.firstNotNullOfOrNull { i -> secretSlotErrors(slots, i).let { it.first ?: it.second } }
+        val errors =
+            listOfNotNull(
+                goalError(config.goal()),
+                startUrlError(config.startUrl()),
+                apiKeyError(config.provider(), config.apiKey()?.reveal()),
+                modelError(config.provider(), config.model()),
+                serverUrlError(config.provider(), config.baseUrl()),
+                positiveError("Max steps per run", config.maxSteps()),
+                positiveError("Max \$ per run", config.maxRunCost()),
+                positiveError("Max \$ per task", config.maxTaskCost()),
+                positiveError("Check every", config.repeatInterval()),
+            ) + slots.indices.flatMap { i -> secretSlotErrors(slots, i).toList().filterNotNull() }
+        if (errors.isEmpty()) return null
+        return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
 
     /**

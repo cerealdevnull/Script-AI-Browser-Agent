@@ -48,9 +48,26 @@ class ConfigValidationTest {
     @Test
     fun `repeat interval must be positive`() = assertRejected(TestConfig(repeatInterval = 0), "Check every must be > 0")
 
-    /** An invalid config ends with Error and a notification, and makes no model call. */
-    private fun assertRejected(config: TestConfig, reason: String) =
+    @Test
+    fun `an old saved task lists every problem in one notification`() =
         runBlocking {
+            val host = Host()
+            val model = ScriptedModel()
+
+            val result = host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(apiKey = null, repeatInterval = 0))
+
+            val expected = "Fix these in the task settings: API key is required for Anthropic. Check every must be > 0."
+            assertIs<ExecutionResult.Error>(result)
+            assertEquals(expected, result.message)
+            assertEquals(expected, host.statuses.last())
+            assertTrue(host.notifications.single().message.startsWith("$expected\n"))
+            assertTrue(model.requests.isEmpty())
+        }
+
+    /** An invalid config ends with Error and a notification, and makes no model call. */
+    private fun assertRejected(config: TestConfig, error: String) =
+        runBlocking {
+            val reason = "Fix these in the task settings: $error."
             val host = Host()
             val model = ScriptedModel()
 

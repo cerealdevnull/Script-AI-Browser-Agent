@@ -105,9 +105,11 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 32,
         keyName = "maxRunCost",
         name = "Max $ per run",
-        description = "A run stops once its model calls have cost this many dollars.",
+        description =
+            "A run stops once its model calls have cost this many dollars. " +
+                "A typical run on the recommended model costs about \$0.20; simple goals less, long ones up to \$1.",
     )
-    fun maxRunCost(): Double = 3.0
+    fun maxRunCost(): Double = 2.0
 
     @ScriptConfigurationItem(
         position = 33,
@@ -115,7 +117,7 @@ interface AgentConfiguration : ScriptConfiguration {
         name = "Max $ per task",
         description = "The task stops once all its runs together have cost this many dollars. Resets when the task restarts.",
     )
-    fun maxTaskCost(): Double = 10.0
+    fun maxTaskCost(): Double = 5.0
 
     @ScriptConfigurationItem(
         position = 20,

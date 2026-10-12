@@ -657,7 +657,8 @@ class Agent(
         private const val REPEAT_MODE =
             "Run mode: Repeat. This script re-checks the page on its own schedule and notifies the user when the goal's " +
                 "condition holds; don't look for a notify or alert feature on the site. Report whether the condition holds now " +
-                "(goal_met) and give a check: the element and condition that tell whether it holds, so later re-checks need no model."
+                "(goal_met) and give a check: the element and condition that tell whether it holds, so later re-checks need no model. " +
+                "If the goal is a question, watch for the answer that makes it worth notifying, usually yes."
 
         private const val ONCE_MODE =
             "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found."

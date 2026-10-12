@@ -97,6 +97,19 @@ class CapsTest {
     }
 
     @Test
+    fun `a local model with no price is announced once before step 1 and the run goes ahead`() {
+        val line = "No price known for llama3.3:70b: the \$ caps can't stop this task, only Max steps can."
+        val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf("llama3.3:70b"))
+        val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
+
+        val result = runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+
+        assertIs<ExecutionResult.Success>(result)
+        assertTrue(host.statuses.indexOf(line) in 0 until host.statuses.indexOfFirst { it.startsWith("Step 1") }, host.statuses.joinToString("\n"))
+        assertEquals(1, host.logs.count { it == "WARN $line" })
+    }
+
+    @Test
     fun `a fallback model is priced at its own rate`() {
         // Opus 5.5 would be $0.06; Haiku 5.5 answers: 10000 x $0.10 + 1000 x $0.50 per MTok = $0.0015.
         val model =

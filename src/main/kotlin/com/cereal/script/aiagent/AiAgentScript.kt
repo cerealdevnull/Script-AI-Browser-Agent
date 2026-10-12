@@ -35,6 +35,9 @@ class AiAgentScript(
     // The pre-flight key and model check passed this task start.
     private var checked = false
 
+    // The no-price line is shown once per task, before its first step.
+    private var priceAnnounced = false
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
@@ -42,6 +45,7 @@ class AiAgentScript(
         scrubber = null
         transientFailures = 0
         checked = false
+        priceAnnounced = false
         if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
@@ -72,6 +76,13 @@ class AiAgentScript(
                 log.error("Chrome could not be started: ${e.message}")
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
+        val modelId = configuration.modelId()
+        if (!priceAnnounced && Prices.cost(modelId, Usage(0, 0)) == null) {
+            val line = "No price known for $modelId: the \$ caps can't stop this task, only Max steps can."
+            log.warn(line)
+            statusUpdate(line)
+        }
+        priceAnnounced = true
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
             Agent(

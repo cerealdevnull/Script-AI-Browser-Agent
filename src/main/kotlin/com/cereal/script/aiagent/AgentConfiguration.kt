@@ -238,7 +238,23 @@ fun startUrlError(startUrl: String?) =
 
 fun apiKeyError(provider: Provider, apiKey: String?) = if (provider != Provider.Custom && apiKey.isNullOrBlank()) "API key is required for $provider" else null
 
-fun modelError(provider: Provider, model: String?) = if (provider == Provider.Custom && model.isNullOrBlank()) "Model is required for Custom" else null
+fun modelError(provider: Provider, model: String?): String? {
+    if (provider == Provider.Custom) return if (model.isNullOrBlank()) "Model is required for Custom" else null
+    val id = model?.trim().orEmpty()
+    val owner = modelOwner(id)?.takeIf { it != provider } ?: return null
+    val article = if (owner.name.first() in "AEIOU") "an" else "a"
+    return "`$id` is $article $owner model. Clear Model to use $provider's recommended model."
+}
+
+/** The preset an id clearly belongs to; null when unknown (the pre-flight judges those). */
+private fun modelOwner(id: String) =
+    when {
+        "/" in id -> Provider.OpenRouter
+        id.startsWith("claude-") -> Provider.Anthropic
+        id.startsWith("gemini-") -> Provider.Gemini
+        id.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(id) -> Provider.OpenAI
+        else -> null
+    }
 
 fun serverUrlError(provider: Provider, baseUrl: String?) = if (provider == Provider.Custom && baseUrl.isNullOrBlank()) "Server URL is required for Custom" else null
 

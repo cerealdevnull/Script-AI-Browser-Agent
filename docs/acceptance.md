@@ -78,19 +78,39 @@ After the Opus runs, compare:
 If the measured cost is far off (a normal goal run uses more than about half of a cap, or a hundredth of it), change
 the defaults in `AgentConfiguration.kt` and update spec #69.
 
-## Manual smoke check (not pass/fail)
+## Smoke check on real sites (not pass/fail)
 
-A read-only stock/price monitor on a real sneaker product page, to find what breaks outside Toolshop.
+`SmokeTest` runs the real script on five real sites, to find what breaks outside Toolshop. It uses
+`gemini-3.5-flash-lite` through the OpenAI-compatible provider (a few cents in total) and skips itself without
+`GEMINI_API_KEY`. The goals are read-only and every confirmation is declined. For each site it writes the log,
+the notifications and every model request and response to `build/smoke/<id>/`, to be judged afterwards.
 
-1. In the Cereal client (or a scratch test copying `G1MonitorTest` without the stock flip), create a task:
-   Run mode `Repeat`, interval 300, Anthropic, your key, model `claude-opus-5-5`, no secrets.
-   - Goal: "Notify me when size 43 is in stock" (pick a size that is sold out), or "Notify me when the price drops
-     below €X".
-   - Start URL: a Nike (`nike.com/…/t/…`) or Zalando (`zalando.nl/…html`) product page.
-2. Watch the first run in the visible Chrome and read the log. Let it loop two or three times.
-3. Never buy, never add to a cart, never sign in.
-4. Write down what you saw:
+```bash
+read -s "GEMINI_API_KEY?Gemini API key: " && export GEMINI_API_KEY
+./gradlew acceptanceTest --tests '*SmokeTest'
+SMOKE_ONLY=nike,ad ./gradlew acceptanceTest --tests '*SmokeTest'   # a subset
+```
 
-| Site / URL | Bot wall / CAPTCHA | Consent banner (dismissed? how) | Heavy JS / snapshot problems | Steps, $ for run 1 | Replay worked (0 calls)? | Notes |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+Results on 2026-10-11 (`gemini-3.5-flash-lite`, script commit c69d50a). The Gemini free tier answered a few
+requests with 429. The script retried them, so they caused no failures.
+
+| Site / goal | Mode | Bot wall / CAPTCHA | Consent banner | Snapshot problems | Steps, $ per run | Replay (0 calls)? | Notes |
+|---|---|---|---|---|---|---|---|
+| Nike search page: "notify me when the men's Air Force 1 '07 costs less than €50" | Repeat ×3 | none | none seen | none (about 7k input tokens) | 3, 3, 3 steps; about $0.01 each | no, every run re-learned | Read the price (€ 119,99) correctly, but every proposed Check was true now (`textContains "€ 119,99"`, `textAbsent "€ 50"`). There is no way to express "less than". Verification rejected all of them, so nothing was cached. |
+| Zalando search page: "notify me when the Air Force 1 '07 is in stock in size 48.5" | Repeat ×3 | none | dismissed in 1 step ("OK") | The size picker opened (`button "Maat kiezen" expanded`), but no sizes appeared in the snapshot. Three clicks failed with `Node is detached from document`. One text ref matched 29 nodes. | 14, 9, 8 steps; $0.03, $0.02, $0.02 | no | **False "Goal met" in run 3.** After "Check is true but goal_met is false", the model flipped `goal_met` to true. Its summary still said "out of stock". It sent a Success notification and the Repeat task ended. |
+| ticketmaster.nl: "notify me when Ticketmaster lists any Taylor Swift event in NL" | Repeat ×2 | none | none seen | none | 3 steps, $0.01; then 0 | **yes** (search replayed, Check passed) | The Check (`textAbsent "Taylor Swift"` on one result) can't tell tribute acts from the real artist. |
+| ad.nl: "tell me the headline of the top story" | Once | none | full-page DPG wall on `myprivacy.dpgmedia.nl` | none | 1 step, $0.00 | n/a | The wall is off-domain, so the click on "Akkoord" asked for a confirmation. The test declined it, and the run ended `Declined by user`. The model chose "Akkoord" (accept all), not "Instellen". |
+| w3schools "Try it Yourself": read the link text in the result pane | Once | none | none | The result pane shows as a bare `Iframe` with no content. A ref the model took from a screenshot was unknown. | 10 steps, $0.02 | n/a | Clicking the link opened a new tab, and the agent stayed on the old page. It got there by navigating to the href itself. "Goal met" only because the same text was in the page's source-code editor. |
+
+Failure kinds, ranked by impact on restock and price monitors:
+
+1. **False "Goal met" after a rejected finish** (Zalando). A finish retry may flip `goal_met` to pass verification, so the user gets a false alert and the monitor stops.
+2. **The goal can't be expressed as a Check, so nothing is cached and every run re-learns** (Nike, Zalando). Numeric conditions and "size X in stock" don't fit `textContains`/`textAbsent` on one element. Every Repeat run then costs a full learn run.
+3. **Content missing from the snapshot.** Iframe content (w3schools) is invisible. Zalando's size list is rendered at the end of the page, past the 14k-char snapshot limit, so the agent reasons from the wrong elements.
+4. **Off-domain consent walls trigger a confirmation** (ad.nl). An unattended monitor stalls on a cookie wall, and the model accepts all cookies.
+5. **Detached nodes on re-rendering pages** (Zalando). Clicks on a ref whose node was re-rendered fail and waste steps.
+6. **New tabs are not followed** (w3schools). The agent stays on the old page.
+7. **Ambiguous text refs in Readouts** (Zalando). A minor problem: verification catches it.
+
+Not seen: bot walls or CAPTCHAs (Nike, Zalando and Ticketmaster all loaded in headed Chrome), oversized snapshots
+(the largest step had about 12k input tokens). The Zalando size list is not shadow DOM: it sits at char ~65k of the snapshot (see `research/zalando-size-list`).

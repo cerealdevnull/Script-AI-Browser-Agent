@@ -25,16 +25,61 @@ class FailureTest {
         }
 
     @Test
-    fun `a rejected key ends the run with Error and a notification with the cost suffix`() {
-        val result = run(failingModel(ModelException("Model/API key rejected: HTTP 401: invalid x-api-key")))
+    fun `a model 4xx ends the run with Error, the provider's short message and a start-again action`() {
+        val result = run(failingModel(ModelException("Model error: HTTP 400: prompt is too long")))
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key", result.message)
-        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key\nCost: \$0", host.notifications.single().message)
+        assertEquals("Anthropic returned an error: HTTP 400: prompt is too long.", result.message)
+        assertEquals("Anthropic returned an error: HTTP 400: prompt is too long.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     @Test
-    fun `a refusal ends the run with Model refused`() {
+    fun `a transient model failure in a Once run says the provider couldn't be reached`() {
+        val result = run(failingModel(ModelException("Model error: network error: connection reset", transient = true)))
+
+        assertEquals("Couldn't reach Anthropic (network error).\nTry again later.\nCost: \$0", host.notifications.single().message)
+        assertIs<ExecutionResult.Error>(result)
+    }
+
+    @Test
+    fun `a model that stops without a tool call ends with a start-again action`() {
+        val model =
+            object : ModelClient {
+                override suspend fun send(request: ModelRequest) = ModelTurn(emptyList(), "end_turn", ScriptedModel.MODEL, Usage(1000, 100), raw = null, text = "Done?")
+            }
+
+        run(model)
+
+        assertEquals("The model stopped without an answer.\nStart the task again.\nCost: \$0.01", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a Chrome that won't start asks to check the Chrome install`() {
+        val notADir = java.nio.file.Files.createTempFile("profiles", "")
+        val model = ScriptedModel()
+
+        val result = runBlocking { host.run(AiAgentScript({ model }, notADir), TestConfig(startUrl = site.url())) }
+
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals(
+            "Couldn't start Google Chrome.\nCheck that Chrome is installed and opens normally, then start the task again.\nCost: \$0",
+            host.notifications.single().message,
+        )
+    }
+
+    @Test
+    fun `an unexpected error inside the script asks to send the task log`() {
+        val result = run(object : ModelClient { override suspend fun send(request: ModelRequest): ModelTurn = error("boom") })
+
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals(
+            "Something went wrong inside the script.\nStart the task again. If it happens again, send the task log to the developer.\nCost: \$0",
+            host.notifications.single().message,
+        )
+    }
+
+    @Test
+    fun `a refusal names the provider and says retrying won't help`() {
         val model =
             object : ModelClient {
                 override suspend fun send(request: ModelRequest) =
@@ -44,8 +89,11 @@ class FailureTest {
         val result = run(model)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Model refused: I can't help with that.", result.message)
-        assertEquals("Model refused: I can't help with that.\nCost: \$0.01", host.notifications.single().message)
+        assertEquals("Anthropic's model declined this goal: I can't help with that.", result.message)
+        assertEquals(
+            "Anthropic's model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
+            host.notifications.single().message,
+        )
     }
 
     @Test
@@ -59,9 +107,10 @@ class FailureTest {
         assertTrue(nudge !in model.requests[2].lastText, "no nudge after 2 repeats")
         assertTrue(nudge in model.requests[3].lastText, model.requests[3].lastText)
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("stuck: repeating the same action", result.message)
+        val headline = "The agent got stuck repeating the same action on ${site.url("product.html")}."
+        assertEquals(headline, result.message)
         assertEquals(6, model.requests.size)
-        assertEquals("stuck: repeating the same action\nCost: \$0.04", host.notifications.single().message)
+        assertEquals("$headline\nMake the goal more specific, then start the task again.\nCost: \$0.04", host.notifications.single().message)
     }
 
     @Test
@@ -82,8 +131,8 @@ class FailureTest {
         val result = run(model, pageLoadTimeoutMs = 1_500)
 
         assertIs<ExecutionResult.Error>(result)
-        assertTrue(result.message.startsWith("Page load failed: "), result.message)
+        assertEquals("Couldn't load ${site.url("never-loads.html")} (timed out).", result.message)
         assertEquals(2, model.requests.size)
-        assertTrue(host.notifications.single().message.endsWith("\nCost: \$0.01"))
+        assertEquals("${result.message}\nThe site may be down. Try again later.\nCost: \$0.01", host.notifications.single().message)
     }
 }

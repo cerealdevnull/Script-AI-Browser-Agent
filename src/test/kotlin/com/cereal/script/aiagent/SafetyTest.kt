@@ -145,7 +145,7 @@ class SafetyTest {
         run(model, "account-settings.html")
 
         assertEquals(2, model.requests.size)
-        assertTrue(host.notifications.single().message.startsWith("x"), "refused, never confirmed")
+        assertTrue(host.notifications.single().message.startsWith("The agent gave up: x."), "refused, never confirmed")
     }
 
     @Test

@@ -260,10 +260,13 @@ class RepeatTest {
             assertIs<ExecutionResult.Loop>(execute()) // 3 steps, $0.018
             val stopped = execute() // 1 step brings the task to $0.024
             assertIs<ExecutionResult.Error>(stopped)
-            assertEquals("Step/cost limit reached: max \$ per task (\$0.02)", stopped.message)
+            assertEquals("This task has spent \$0.02, its Max \$ per task limit.", stopped.message)
         }
         assertEquals(4, model.requests.size)
-        assertEquals("Step/cost limit reached: max \$ per task (\$0.02)\nCost: \$0.01", host.notifications.single().message)
+        assertEquals(
+            "This task has spent \$0.02, its Max \$ per task limit.\nRaise Max \$ per task to keep it running.\nCost: \$0.01",
+            host.notifications.single().message,
+        )
 
         val restarted = ScriptedModel(noCheck, noCheck, noCheck)
         task(restarted, config(maxTaskCost = 0.02)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
@@ -328,10 +331,13 @@ class RepeatTest {
 
             val ended = execute()
             assertIs<ExecutionResult.Error>(ended)
-            assertEquals("Model error: HTTP 503: overloaded", ended.message)
+            assertEquals("The monitor stopped: 3 checks in a row couldn't reach Anthropic.", ended.message)
         }
         assertEquals(8, model.requests.size)
-        assertEquals("Model error: HTTP 503: overloaded\nCost: \$0", host.notifications.single().message)
+        assertEquals(
+            "The monitor stopped: 3 checks in a row couldn't reach Anthropic.\nStart the task again when it's back.\nCost: \$0",
+            host.notifications.single().message,
+        )
     }
 
     @Test
@@ -340,7 +346,7 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key\nCost: \$0", host.notifications.single().message)
+        assertEquals("Anthropic returned an error: HTTP 401: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     private companion object {

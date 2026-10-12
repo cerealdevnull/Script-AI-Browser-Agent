@@ -274,12 +274,12 @@ class HealTest {
         task(healing, config(maxSteps = 1)) { execute ->
             val stopped = execute()
             assertIs<ExecutionResult.Error>(stopped)
-            assertEquals("Step/cost limit reached: max steps per run (1)", stopped.message)
+            assertEquals("Stopped after 1 step, the Max steps per run limit.", stopped.message)
         }
 
         assertEquals(1, healing.requests.size)
         assertEquals(learned, cacheSteps())
-        assertEquals("Step/cost limit reached: max steps per run (1)\nCost: \$0.01", host.notifications.last().message)
+        assertTrue(host.notifications.last().message.startsWith("Stopped after 1 step, the Max steps per run limit.\n"))
     }
 
     private companion object {

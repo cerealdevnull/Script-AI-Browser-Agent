@@ -48,15 +48,15 @@ class OnceGoalTest {
     }
 
     @Test
-    fun `fail from the model ends with Error and a notification carrying the reason`() {
+    fun `fail from the model ends with Error and a gave-up headline carrying the reason, with no action line`() {
         val model = ScriptedModel({ listOf(call("fail", """{"reason": "The product page shows no stock information."}""")) })
 
         val result = run(model)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("The product page shows no stock information.", result.message)
-        assertEquals("The product page shows no stock information.\nCost: $0.01", host.notifications.single().message)
-        assertEquals("The product page shows no stock information.", host.statuses.last())
+        assertEquals("The agent gave up: The product page shows no stock information.", result.message)
+        assertEquals("The agent gave up: The product page shows no stock information.\nCost: $0.01", host.notifications.single().message)
+        assertEquals("The agent gave up: The product page shows no stock information.", host.statuses.last())
     }
 
     @Test

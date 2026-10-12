@@ -63,7 +63,7 @@ class AiAgentScript(
                 throw e
             } catch (e: Exception) {
                 log.error("Chrome could not be started: ${e.message}")
-                return report.error("Couldn't start Google Chrome.", cost = COST_ZERO)
+                return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
@@ -85,6 +85,7 @@ class AiAgentScript(
                 },
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
+                configuration.provider().let { if (it == Provider.Custom) "your server" else it.name },
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
@@ -114,7 +115,7 @@ class AiAgentScript(
                 // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
                 // Logged as scrubbed text, not as a Throwable: its message could carry a secret or the API key.
                 log.error(scrubber.forLog("goal run failed: ${e.stackTraceToString()}"))
-                return report.error("Something went wrong inside the script.", cost = cost())
+                return report.error("Something went wrong inside the script.", "Start the task again. If it happens again, send the task log to the developer.", cost())
             } finally {
                 taskSpent += agent.cost
             }
@@ -136,8 +137,14 @@ class AiAgentScript(
             return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
         }
         return when (outcome) {
-            is Outcome.Failed -> report.error(verdict, cost = cost())
-            is Outcome.Stopped -> report.error(verdict, cost = cost()).let { ExecutionResult.Error(outcome.reason) }
+            is Outcome.Failed if repeat && outcome.transient ->
+                report.error(
+                    scrubber.forLog("The monitor stopped: $MAX_TRANSIENT_FAILURES checks in a row couldn't reach ${outcome.unreachable}."),
+                    "Start the task again when it's back.",
+                    cost(),
+                )
+            is Outcome.Failed -> report.error(verdict, outcome.action, cost())
+            is Outcome.Stopped -> report.error(verdict, outcome.action, cost())
             is Outcome.Declined -> report.error(verdict, cost = cost()).let { ExecutionResult.Error("declined by user") }
             // A monitor stays quiet until the goal is met.
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
@@ -290,6 +297,6 @@ private fun escapeHtml(s: String) =
 
 private val SECRET_NAME = Regex("[a-z][a-z0-9_]*")
 
-private fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
+internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 
 private const val COST_ZERO = "Cost: \$0"

@@ -8,6 +8,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,11 +36,12 @@ class RepeatTest {
         secrets: List<Pair<String, Secret>> = emptyList(),
         reLearn: Boolean = false,
         maxTaskCost: Double = 10.0,
+        repeatInterval: Int = 7,
     ) = TestConfig(
         goal = goal,
         startUrl = site.url(startPath),
         runMode = RunMode.Repeat,
-        repeatInterval = 7,
+        repeatInterval = repeatInterval,
         secrets = secrets,
         reLearn = reLearn,
         maxTaskCost = maxTaskCost,
@@ -46,13 +51,14 @@ class RepeatTest {
     private fun task(
         model: ModelClient,
         config: TestConfig = config(),
+        clock: Clock = Clock.systemDefaultZone(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AiAgentScript({ model }, profiles)
+        val script = AiAgentScript({ model }, profiles, clock = clock)
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
-            block { script.execute(config, provider) {} }
+            block { script.execute(config, provider) { host.statuses += it } }
         } finally {
             script.onFinish(config, provider)
         }
@@ -102,6 +108,36 @@ class RepeatTest {
             assertEquals(2, model.requests.size)
             assertEquals("Goal met\nCost: \$0", host.notifications.single().message)
         }
+    }
+
+    /** A clock the test moves by hand, in UTC. */
+    private class TestClock(var now: Instant) : Clock() {
+        override fun instant() = now
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId) = this
+    }
+
+    @Test
+    fun `between checks the task row shows when it checked, when it checks next, and the task total`() {
+        stock("Out of stock")
+        val clock = TestClock(Instant.parse("2026-10-12T14:32:00Z"))
+
+        task(learning(), config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
+            val first = "Not yet · checked 14:32 · next 14:47 · \$0.01 of \$5 total"
+            assertEquals(first, assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(first, host.statuses.last())
+
+            clock.now = Instant.parse("2026-10-12T14:47:00Z")
+            assertEquals("Not yet · checked 14:47 · next 15:02 · \$0.01 of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
+            assertTrue(host.logs.any { "check 2" in it }, host.logs.joinToString("\n"))
+
+            clock.now = Instant.parse("2026-10-12T15:02:00Z")
+            site.close()
+            val retry = "Couldn't reach 127.0.0.1 (1 of 3) · retrying 15:17"
+            assertEquals(retry, assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(retry, host.statuses.last())
+        }
+        assertTrue(host.notifications.isEmpty(), host.notifications.toString())
     }
 
     @Test

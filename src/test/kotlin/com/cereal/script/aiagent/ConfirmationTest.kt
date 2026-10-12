@@ -47,12 +47,13 @@ class ConfirmationTest {
 
         val result = run(model, "checkout.html")
 
-        assertEquals("Error: declined by user", result.text)
+        assertEquals("Success: $DECLINED", result.text)
         assertEquals(1, host.dialogs.size)
         assertEquals(1, model.requests.size)
         assertFalse("/order.html" in site.requested, "the order was submitted")
         assertEquals("Place this order on 127.0.0.1?\nConfirmation needed: answer in the window that opened. The task waits until you answer.", host.notifications.first().message)
-        assertTrue(host.notifications.last().message.startsWith("Declined by user\n"), host.notifications.last().message)
+        assertTrue(host.notifications.last().message.matches(Regex("${Regex.escape(DECLINED)}\nCost: \\$[0-9.]+")), host.notifications.last().message)
+        assertEquals(DECLINED, host.statuses.last())
     }
 
     @Test
@@ -80,7 +81,7 @@ class ConfirmationTest {
         host.dialogAnswers += UserInteractionCanceledException()
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("button", "Place order")}}""")) })
 
-        assertEquals("Error: declined by user", run(model, "checkout.html").text)
+        assertEquals("Success: $DECLINED", run(model, "checkout.html").text)
         assertFalse("/order.html" in site.requested)
     }
 
@@ -111,7 +112,7 @@ class ConfirmationTest {
                 { listOf(call("click", """{"ref": ${it.ref("button", "Create account")}, "irreversible": true, "reason": "creates an account"}""")) },
             )
 
-        assertEquals("Error: declined by user", run(model, "signup.html").text)
+        assertEquals("Success: Stopped: you declined to press “Create account” on 127.0.0.1. Nothing was done.", run(model, "signup.html").text)
         assertEquals(1, host.dialogs.size)
         assertFalse(host.logs.any { "model flag cleared" in it })
     }
@@ -140,7 +141,7 @@ class ConfirmationTest {
                 { listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1\n"}""")) },
             )
 
-        assertEquals("Error: declined by user", run(model, "lookup.html").text)
+        assertEquals("Success: Stopped: you declined to send this text on 127.0.0.1. Nothing was done.", run(model, "lookup.html").text)
         assertEquals(2, model.requests.size, "the plain type asked nothing")
         assertEquals(1, host.dialogs.size)
         assertFalse("/order.html" in site.requested)
@@ -152,7 +153,7 @@ class ConfirmationTest {
         // redirect.html sends the browser to localhost, which is not an allowed domain.
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("checkbox", "Remember me")}}""")) })
 
-        assertEquals("Error: declined by user", run(model, "redirect.html").text)
+        assertTrue(run(model, "redirect.html").text.startsWith("Success: Stopped: you declined to press “Remember me” on "))
         assertEquals(1, host.dialogs.size)
     }
 
@@ -241,5 +242,6 @@ class ConfirmationTest {
     private companion object {
         const val EMAIL = "customer@practicesoftwaretesting.com"
         const val PASSWORD = "welcome01"
+        const val DECLINED = "Stopped: you declined to place this order on 127.0.0.1. Nothing was done."
     }
 }

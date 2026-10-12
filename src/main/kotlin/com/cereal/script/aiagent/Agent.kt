@@ -52,8 +52,8 @@ sealed interface Outcome {
     /** A step or cost cap was hit. */
     class Stopped(val reason: String, override val steps: Int) : Outcome
 
-    /** The user declined (or closed) a confirmation. */
-    class Declined(override val steps: Int) : Outcome
+    /** The user declined (or closed) the confirmation of [step]. */
+    class Declined(val step: Confirmation, override val steps: Int) : Outcome
 }
 
 /**
@@ -74,7 +74,12 @@ class Confirmation(val action: String, val element: String, val url: String, val
             }
 
     /** The dialog headline and notification: "Place this order on amazon.com?". */
-    val question get() = "$verb on ${hostOf(url)?.let(::registrableDomain) ?: url}?"
+    val question get() = "$verb on $site?"
+
+    /** The headline when the user says No: a normal finish. */
+    val declined get() = "Stopped: you declined to ${verb.replaceFirstChar(Char::lowercase)} on $site. Nothing was done."
+
+    private val site get() = hostOf(url)?.let(::registrableDomain) ?: url
 
     private companion object {
         // ponytail: English keywords only (Irreversible also knows Dutch, which falls back to "Press “…”").
@@ -227,7 +232,7 @@ class Agent(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: DeclinedException) {
-                        return Outcome.Declined(steps)
+                        return Outcome.Declined(e.step, steps)
                     } catch (e: PageLoadException) {
                         val key = call.name + call.args
                         if (key == loadFailure) return Outcome.Failed("Page load failed: ${e.message}", steps, transient = true)
@@ -424,7 +429,7 @@ class Agent(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DeclinedException) {
-                return Outcome.Declined(0)
+                return Outcome.Declined(e.step, 0)
             } catch (e: PageLoadException) {
                 return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
             } catch (e: Exception) {
@@ -526,10 +531,11 @@ class Agent(
             if (irreversible.signInSubmit(call.name, ref, text)) return log("model flag cleared: sign-in submit")
         }
         val reason = (call.args["reason"] as? JsonPrimitive)?.contentOrNull
-        if (!confirm(Confirmation(call.name, browser.describe(ref), browser.url(), reason, text))) throw DeclinedException()
+        val step = Confirmation(call.name, browser.describe(ref), browser.url(), reason, text)
+        if (!confirm(step)) throw DeclinedException(step)
     }
 
-    private class DeclinedException : Exception("declined by user")
+    private class DeclinedException(val step: Confirmation) : Exception("declined by user")
 
     /** Never-do: no typing into password, email or card fields on an account-settings page. */
     private suspend fun refusingAccountSettings(ref: Int): Int {

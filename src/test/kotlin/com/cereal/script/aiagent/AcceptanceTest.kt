@@ -260,14 +260,14 @@ class G3BuyTest {
 
         task().use {
             val stats = run("Decline")
-            assertIs<ExecutionResult.Error>(stats.result)
-            assertEquals("declined by user", stats.result.message)
+            assertIs<ExecutionResult.Success>(stats.result)
+            assertTrue(stats.result.message.matches(Regex("Stopped: you declined to .+\\. Nothing was done\\.")), stats.result.message)
             assertEquals(1, stats.dialogs, "one confirmation, declined")
         }
 
         assertEquals(before, count(), "an invoice was created after Decline")
         assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") }, host.notifications.map { it.message }.toString())
-        assertTrue(host.notifications.last().message.startsWith("Declined by user"), host.notifications.last().message)
+        assertTrue(host.notifications.last().message.startsWith("Stopped: you declined to "), host.notifications.last().message)
         traffic.assertNeverContains(Demo.password, "the password")
         traffic.assertFallbacksAccepted()
     }

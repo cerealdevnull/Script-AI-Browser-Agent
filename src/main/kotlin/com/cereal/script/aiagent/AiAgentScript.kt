@@ -124,7 +124,7 @@ class AiAgentScript(
                     is Outcome.Failed -> outcome.reason
                     is Outcome.Stopped -> outcome.reason
                     is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
-                    is Outcome.Declined -> "Declined by user"
+                    is Outcome.Declined -> outcome.step.declined
                 },
             )
         statusUpdate(verdict)
@@ -138,7 +138,8 @@ class AiAgentScript(
         return when (outcome) {
             is Outcome.Failed -> report.error(verdict, cost = cost())
             is Outcome.Stopped -> report.error(verdict, cost = cost()).let { ExecutionResult.Error(outcome.reason) }
-            is Outcome.Declined -> report.error(verdict, cost = cost()).let { ExecutionResult.Error("declined by user") }
+            // A No is a normal finish, not an Error; it ends a monitor too.
+            is Outcome.Declined -> report.notify(verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
             // A monitor stays quiet until the goal is met.
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {

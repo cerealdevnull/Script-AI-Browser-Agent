@@ -25,6 +25,9 @@ class Host : ComponentProviderFactory {
     val notifications = mutableListOf<Notification>()
     val logs = mutableListOf<String>()
 
+    /** Every status line the script showed, in order. */
+    val statuses = mutableListOf<String>()
+
     /** The HTML of every `showHtml` dialog, in order. */
     val dialogs = mutableListOf<String>()
 
@@ -74,21 +77,21 @@ class Host : ComponentProviderFactory {
 
     /** Runs the script like the host does, through [TestScriptRunner], and returns the last [ExecutionResult]. */
     suspend fun run(script: AiAgentScript, config: AgentConfiguration): ExecutionResult? {
-        val recording = RecordingScript(script)
+        val recording = RecordingScript(script, statuses)
         TestScriptRunner(recording).run(config, this)
         return recording.last
     }
 }
 
 /** Remembers the last result of execute(), which [TestScriptRunner] doesn't expose. */
-class RecordingScript(private val script: AiAgentScript) : Script<AgentConfiguration> by script {
+class RecordingScript(private val script: AiAgentScript, private val statuses: MutableList<String> = mutableListOf()) : Script<AgentConfiguration> by script {
     @Volatile var last: ExecutionResult? = null
 
     override suspend fun execute(
         configuration: AgentConfiguration,
         provider: ComponentProvider,
         statusUpdate: suspend (message: String) -> Unit,
-    ): ExecutionResult = script.execute(configuration, provider, statusUpdate).also { last = it }
+    ): ExecutionResult = script.execute(configuration, provider) { statuses += it; statusUpdate(it) }.also { last = it }
 }
 
 class TestConfig(

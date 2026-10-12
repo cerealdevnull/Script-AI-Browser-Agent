@@ -147,7 +147,10 @@ class Agent(
                     "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
             if (turn.stopReason == "refusal") return Outcome.Failed("Model refused: ${turn.text ?: "no reason given"}", steps)
-            if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
+            if (turn.toolCalls.isEmpty()) {
+                warn("step $steps: the model stopped without calling finish (stop reason: ${turn.stopReason})")
+                return Outcome.Failed("The model stopped without an answer.", steps)
+            }
 
             val results = mutableListOf<ToolResult>()
             for ((i, call) in turn.toolCalls.withIndex()) {

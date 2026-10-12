@@ -59,7 +59,7 @@ class ConfigValidationTest {
             assertIs<ExecutionResult.Error>(result)
             assertEquals(reason, result.message)
             val notification = host.notifications.single()
-            assertTrue(notification.message.startsWith("Failed: $reason"), notification.message)
+            assertTrue(notification.message.startsWith("$reason\n"), notification.message)
             assertTrue(model.requests.isEmpty())
         }
 }

@@ -40,7 +40,7 @@ class ReadoutTest {
 
         assertIs<ExecutionResult.Success>(result)
         assertEquals(
-            "Goal met\nInvoice number: INV-2026000042\nDate: 2026-10-01\nTotal: $27.30\nFound the latest invoice.\n1 step, $0.01",
+            "Goal met\nInvoice number: INV-2026000042\nDate: 2026-10-01\nTotal: $27.30\nFound the latest invoice.\nCost: $0.01",
             host.notifications.single().message,
         )
     }
@@ -53,7 +53,7 @@ class ReadoutTest {
         assertIs<ExecutionResult.Success>(run(second))
 
         assertTrue(second.requests.isEmpty())
-        assertEquals("Goal met\nInvoice number: INV-2026000042\nDate: 2026-10-01\nTotal: $27.30\nreplayed, $0", host.notifications.last().message)
+        assertEquals("Goal met\nInvoice number: INV-2026000042\nDate: 2026-10-01\nTotal: $27.30\nCost: $0 (reused what it learned last time)", host.notifications.last().message)
     }
 
     @Test
@@ -97,7 +97,7 @@ class ReadoutTest {
         assertIs<ExecutionResult.Success>(result)
         assertEquals(3, model.requests.size)
         // The unverified value is never reported; the verified ones are.
-        assertEquals("Goal met\nDate: 2026-10-01\nTotal: $27.30\nFound it.\n3 steps, $0.02", host.notifications.single().message)
+        assertEquals("Goal met\nDate: 2026-10-01\nTotal: $27.30\nFound it.\nCost: $0.02", host.notifications.single().message)
         assertTrue(host.logs.any { "Readout" in it && "INV-1" in it }, host.logs.joinToString("\n"))
     }
 }

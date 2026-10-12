@@ -100,7 +100,7 @@ class RepeatTest {
             stock("In stock")
             assertIs<ExecutionResult.Success>(execute())
             assertEquals(2, model.requests.size)
-            assertEquals("Goal met\nreplayed, \$0", host.notifications.single().message)
+            assertEquals("Goal met\nCost: \$0", host.notifications.single().message)
         }
     }
 
@@ -162,7 +162,7 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
-        assertEquals("Goal met\n2 steps, \$0.01", host.notifications.single().message)
+        assertEquals("Goal met\nCost: \$0.01", host.notifications.single().message)
         val cached = Json.parseToJsonElement(assertNotNull(cache())).jsonObject
         assertEquals(1, cached.getValue("steps").jsonArray.size)
         assertTrue(cached["check"] == null || cached["check"] is JsonNull, cached.toString())
@@ -263,7 +263,7 @@ class RepeatTest {
             assertEquals("Step/cost limit reached: max \$ per task (\$0.02)", stopped.message)
         }
         assertEquals(4, model.requests.size)
-        assertEquals("Stopped: Step/cost limit reached: max \$ per task (\$0.02)\n1 step, \$0.01", host.notifications.single().message)
+        assertEquals("Step/cost limit reached: max \$ per task (\$0.02)\nCost: \$0.01", host.notifications.single().message)
 
         val restarted = ScriptedModel(noCheck, noCheck, noCheck)
         task(restarted, config(maxTaskCost = 0.02)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
@@ -331,7 +331,7 @@ class RepeatTest {
             assertEquals("Model error: HTTP 503: overloaded", ended.message)
         }
         assertEquals(8, model.requests.size)
-        assertEquals("Failed: Model error: HTTP 503: overloaded\n0 steps, \$0.00", host.notifications.single().message)
+        assertEquals("Model error: HTTP 503: overloaded\nCost: \$0", host.notifications.single().message)
     }
 
     @Test
@@ -340,7 +340,7 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Failed: Model/API key rejected: HTTP 401: invalid x-api-key\n0 steps, \$0.00", host.notifications.single().message)
+        assertEquals("Model/API key rejected: HTTP 401: invalid x-api-key\nCost: \$0", host.notifications.single().message)
     }
 
     private companion object {

@@ -45,7 +45,8 @@ class AiAgentScript(
         provider: ComponentProvider,
         statusUpdate: suspend (message: String) -> Unit,
     ): ExecutionResult {
-        configError?.let { return fail(configuration, provider, it) }
+        val report = Report(configuration, provider, statusUpdate)
+        configError?.let { return report.error(it, cost = COST_ZERO) }
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
         val browser =
@@ -60,7 +61,8 @@ class AiAgentScript(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                return fail(configuration, provider, "Chrome could not be started: ${e.message}", "\n${stepCount(0)}, ${usd(0.0)}")
+                log.error("Chrome could not be started: ${e.message}")
+                return report.error("Couldn't start Google Chrome.", cost = COST_ZERO)
             }
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
@@ -86,8 +88,14 @@ class AiAgentScript(
         val key = cacheKey(configuration)
         var replayed = false
         val cost = {
-            val steps = stepCount(agent.steps) + ", " + usd(agent.cost)
-            "\n" + if (agent.healed) "replayed + healed in $steps" else if (replayed) "replayed, \$0" else steps
+            val spent = usd(agent.cost).takeUnless { it == "\$0.00" } ?: "\$0"
+            "Cost: $spent" +
+                when {
+                    repeat -> ""
+                    agent.healed -> " (the page changed, so it re-learned part of it)"
+                    replayed -> " (reused what it learned last time)"
+                    else -> ""
+                }
         }
         val outcome =
             try {
@@ -104,18 +112,20 @@ class AiAgentScript(
                 // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
                 // Logged as scrubbed text, not as a Throwable: its message could carry a secret or the API key.
                 log.error(scrubber.forLog("goal run failed: ${e.stackTraceToString()}"))
-                return fail(configuration, provider, scrubber.forLog("Unexpected error: ${e.message}"), cost())
+                return report.error("Something went wrong inside the script.", cost = cost())
             } finally {
                 taskSpent += agent.cost
             }
         val verdict =
-            when (outcome) {
-                is Outcome.Failed -> "Failed: ${outcome.reason}"
-                is Outcome.Stopped -> "Stopped: ${outcome.reason}"
-                is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
-                is Outcome.Declined -> "Declined by user"
-            }
-        statusUpdate(scrubber.forLog(verdict))
+            scrubber.forLog(
+                when (outcome) {
+                    is Outcome.Failed -> outcome.reason
+                    is Outcome.Stopped -> outcome.reason
+                    is Outcome.Finished -> if (outcome.goalMet) "Goal met" else "Goal not met"
+                    is Outcome.Declined -> "Declined by user"
+                },
+            )
+        statusUpdate(verdict)
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
@@ -124,21 +134,15 @@ class AiAgentScript(
             return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
         }
         return when (outcome) {
-            is Outcome.Failed -> fail(configuration, provider, scrubber.forLog(outcome.reason), cost())
-            is Outcome.Stopped -> {
-                notify(configuration, provider, verdict + cost())
-                ExecutionResult.Error(outcome.reason)
-            }
-            is Outcome.Declined -> {
-                notify(configuration, provider, verdict + cost())
-                ExecutionResult.Error("declined by user")
-            }
+            is Outcome.Failed -> report.error(verdict, cost = cost())
+            is Outcome.Stopped -> report.error(verdict, cost = cost()).let { ExecutionResult.Error(outcome.reason) }
+            is Outcome.Declined -> report.error(verdict, cost = cost()).let { ExecutionResult.Error("declined by user") }
             // A monitor stays quiet until the goal is met.
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
-                val readouts = outcome.readouts.joinToString("") { scrubber.forLog("${it.label}: ${it.text}\n") }
-                val summary = if (repeat || outcome.summary.isEmpty()) "" else scrubber.forLog(outcome.summary).take(300) + "\n"
-                notify(configuration, provider, "$verdict\n$readouts$summary".removeSuffix("\n") + cost())
+                val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
+                val summary = if (repeat || outcome.summary.isEmpty()) emptyList() else listOf(scrubber.forLog(outcome.summary).take(300))
+                report.notify(verdict, details = readouts + summary, cost = cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }
@@ -195,18 +199,25 @@ class AiAgentScript(
         }
     }
 
-    private suspend fun fail(
-        config: AgentConfiguration,
-        provider: ComponentProvider,
-        reason: String,
-        suffix: String = "",
-    ): ExecutionResult {
-        notify(config, provider, "Failed: $reason$suffix")
-        return ExecutionResult.Error(reason)
+    /**
+     * A result notification: the headline (also the final status line), an optional action line, details (success
+     * only), then the cost line. Raw causes (HTTP bodies, exception text) go to the log, not here.
+     */
+    private inner class Report(val config: AgentConfiguration, val provider: ComponentProvider, val statusUpdate: suspend (String) -> Unit) {
+        suspend fun notify(headline: String, action: String? = null, details: List<String> = emptyList(), cost: String) {
+            statusUpdate(headline)
+            notify(config, provider, (listOfNotNull(headline, action) + details + cost).joinToString("\n"))
+        }
+
+        suspend fun error(headline: String, action: String? = null, cost: String): ExecutionResult {
+            notify(headline, action, cost = cost)
+            return ExecutionResult.Error(headline)
+        }
     }
 
     private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, body: String) {
-        provider.notification().sendNotification(Notification("AI agent: " + config.goal().take(60), body))
+        val goal = config.goal()
+        provider.notification().sendNotification(Notification("AI agent: " + if (goal.length > 60) goal.take(60) + "…" else goal, body))
     }
 
     private fun validate(config: AgentConfiguration): String? {
@@ -265,3 +276,5 @@ private fun escapeHtml(s: String) =
 private val SECRET_NAME = Regex("[a-z][a-z0-9_]*")
 
 private fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
+
+private const val COST_ZERO = "Cost: \$0"

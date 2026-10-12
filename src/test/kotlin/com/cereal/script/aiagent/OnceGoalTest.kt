@@ -35,7 +35,16 @@ class OnceGoalTest {
         assertIs<ExecutionResult.Success>(result)
         val notification = host.notifications.single()
         assertEquals("AI agent: Tell me whether Long Nose Pliers is in stock", notification.title)
-        assertEquals("Goal met\nLong Nose Pliers is in stock at $14.15.\n2 steps, $0.01", notification.message)
+        assertEquals("Goal met\nLong Nose Pliers is in stock at $14.15.\nCost: $0.01", notification.message)
+        assertEquals(host.statuses.last(), notification.message.lines().first(), "the headline is the final status line")
+    }
+
+    @Test
+    fun `a goal over 60 characters is cut in the title with an ellipsis`() {
+        val goal = "Tell me whether Long Nose Pliers is in stock, and at what price today"
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) }), goal)
+
+        assertEquals("AI agent: Tell me whether Long Nose Pliers is in stock, and at what pr…", host.notifications.single().title)
     }
 
     @Test
@@ -46,7 +55,8 @@ class OnceGoalTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("The product page shows no stock information.", result.message)
-        assertEquals("Failed: The product page shows no stock information.\n1 step, $0.01", host.notifications.single().message)
+        assertEquals("The product page shows no stock information.\nCost: $0.01", host.notifications.single().message)
+        assertEquals("The product page shows no stock information.", host.statuses.last())
     }
 
     @Test

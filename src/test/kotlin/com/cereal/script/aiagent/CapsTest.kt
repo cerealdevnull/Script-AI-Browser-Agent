@@ -52,7 +52,7 @@ class CapsTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Step/cost limit reached: max steps per run (2)", result.message)
-        assertEquals("Stopped: Step/cost limit reached: max steps per run (2)\n2 steps, \$0.01", host.notifications.single().message)
+        assertEquals("Step/cost limit reached: max steps per run (2)\nCost: \$0.01", host.notifications.single().message)
         assertEquals(2, model.requests.size)
     }
 
@@ -64,7 +64,7 @@ class CapsTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Step/cost limit reached: max \$ per run (\$0.01)", result.message)
-        assertEquals("Stopped: Step/cost limit reached: max \$ per run (\$0.01)\n2 steps, \$0.01", host.notifications.single().message)
+        assertEquals("Step/cost limit reached: max \$ per run (\$0.01)\nCost: \$0.01", host.notifications.single().message)
     }
 
     @Test
@@ -86,7 +86,7 @@ class CapsTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Step/cost limit reached: max steps per run (2)", result.message)
-        assertTrue(host.notifications.single().message.endsWith("\n2 steps, \$0.00"))
+        assertTrue(host.notifications.single().message.endsWith("\nCost: \$0"))
         assertEquals(1, host.logs.count { it == "WARN no price known for model llama3.3:70b: counted as \$0, only the step cap applies" })
     }
 
@@ -102,6 +102,6 @@ class CapsTest {
 
         run(model)
 
-        assertEquals("Goal met\nIn stock.\n1 step, \$0.00", host.notifications.single().message)
+        assertEquals("Goal met\nIn stock.\nCost: \$0", host.notifications.single().message)
     }
 }

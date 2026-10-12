@@ -14,6 +14,7 @@
 - **Readout**: a labelled element whose text is reported verbatim.
 - **irreversible step**: an action that buys, pays, deletes, sends or similar; it needs a confirmation.
 - **confirmation**: the Confirm/Decline dialog shown before an irreversible step.
+- **handoff**: the agent pauses so the user can clear a CAPTCHA, bot wall or verification code in its Chrome, then resumes; unlike a confirmation, the user acts in the browser, not in a dialog.
 - **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.

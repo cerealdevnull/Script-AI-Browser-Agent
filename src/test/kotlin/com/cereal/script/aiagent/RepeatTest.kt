@@ -30,7 +30,7 @@ class RepeatTest {
         goal: String = GOAL,
         startPath: String = "",
         secrets: List<Pair<String, Secret>> = emptyList(),
-        reLearn: Boolean = false,
+        onNextStart: OnNextStart = OnNextStart.Keep,
         maxTaskCost: Double = 10.0,
     ) = TestConfig(
         goal = goal,
@@ -38,7 +38,7 @@ class RepeatTest {
         runMode = RunMode.Repeat,
         repeatInterval = 7,
         secrets = secrets,
-        reLearn = reLearn,
+        onNextStart = onNextStart,
         maxTaskCost = maxTaskCost,
     )
 
@@ -52,7 +52,7 @@ class RepeatTest {
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
-            block { script.execute(config, provider) {} }
+            block { script.execute(config, provider) { host.statuses += it } }
         } finally {
             script.onFinish(config, provider)
         }
@@ -223,7 +223,7 @@ class RepeatTest {
     }
 
     @Test
-    fun `Re-learn removes the entry at task start, and an edited goal has its own entry`() {
+    fun `Forget learned steps acts once, at the task start where it was picked, and an edited goal has its own entry`() {
         stock("Out of stock")
         task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertNotNull(cache())
@@ -231,12 +231,23 @@ class RepeatTest {
         val edited = "$GOAL, please"
         assertNull(cache(edited))
         val relearning = learning()
-        task(relearning, config(reLearn = true)) { execute ->
-            assertNull(cache(), "Re-learn deleted the entry at task start")
-            assertIs<ExecutionResult.Loop>(execute())
+        host.statuses.clear()
+        task(relearning, config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
+            assertNull(cache(), "the entry was deleted at task start")
+            repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
         }
-        assertEquals(2, relearning.requests.size)
+        assertEquals(2, relearning.requests.size, "the second check replayed")
+        assertEquals("Forgot learned steps", host.statuses.first())
+        assertEquals(1, host.statuses.count { it == "Forgot learned steps" }, "a Repeat check never resets: ${host.statuses}")
+        assertEquals(1, host.logs.count { "Forgot learned steps" in it }, host.logs.toString())
         assertNotNull(cache())
+
+        // The next start with the same choice keeps what was learned.
+        val again = ScriptedModel()
+        host.statuses.clear()
+        task(again, config(onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertTrue(again.requests.isEmpty())
+        assertFalse("Forgot learned steps" in host.statuses)
     }
 
     @Test
@@ -314,7 +325,7 @@ class RepeatTest {
 
         site.pages.remove("index.html")
         val restarted = learning()
-        task(restarted, config(maxTaskCost = 0.02, reLearn = true)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        task(restarted, config(maxTaskCost = 0.02, onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertEquals(2, restarted.requests.size, "a restart resets the task total")
     }
 

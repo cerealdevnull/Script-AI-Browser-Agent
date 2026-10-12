@@ -129,11 +129,11 @@ class TestConfig(
     val allowedDomains: List<String> = emptyList(),
     val runMode: RunMode = RunMode.Once,
     val repeatInterval: Int = 300,
-    val reLearn: Boolean = false,
+    val onNextStart: OnNextStart = OnNextStart.Keep,
 ) : AgentConfiguration {
     override fun runMode() = runMode
     override fun repeatInterval() = repeatInterval
-    override fun reLearn() = reLearn
+    override fun onNextStart() = onNextStart
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl

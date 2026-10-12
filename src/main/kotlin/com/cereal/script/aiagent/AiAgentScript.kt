@@ -41,6 +41,9 @@ class AiAgentScript(
     // True until the first execute() after a task start.
     private var firstRun = true
 
+    // The status line of the reset this task start did (On next start), or null.
+    private var reset: String? = null
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
@@ -50,7 +53,7 @@ class AiAgentScript(
         checked = false
         priceAnnounced = false
         firstRun = true
-        if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
+        reset = if (configError == null) onNextStart(configuration, provider) else null
         return true
     }
 
@@ -63,6 +66,7 @@ class AiAgentScript(
         configError?.let { return report.error(it, cost = COST_ZERO) }
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
+        if (firstRun) reset?.let { log.info(it); statusUpdate(it) }
         val model = newModelClient(configuration)
         if (!checked) preflight(configuration, model, report, statusUpdate) { log.warn(scrubber.forLog(it)) }?.let { return it }
         val browser =
@@ -195,7 +199,7 @@ class AiAgentScript(
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
-                report.notify(verdict, details = answer.drop(1) + readouts, cost = cost())
+                report.notify(verdict, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(verdict)
             }
@@ -343,6 +347,25 @@ class AiAgentScript(
         return names.groupBy { it }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { "Secret names must be unique: $it" }
     }
 
+    /**
+     * Acts only when On next start changed since the last task start (none stored = Keep), so it acts once per pick.
+     * Returns the status line of what it reset, or null.
+     */
+    private suspend fun onNextStart(config: AgentConfiguration, provider: ComponentProvider): String? {
+        val prefs = provider.preference()
+        val choice = config.onNextStart()
+        if ((prefs.getString(ON_NEXT_START_KEY) ?: OnNextStart.Keep.name) == choice.name) return null
+        prefs.setString(ON_NEXT_START_KEY, choice.name)
+        if (choice == OnNextStart.Keep) return null
+        prefs.delete(cacheKey(config))
+        if (choice == OnNextStart.ForgetStepsAndSignOut) {
+            val taskId = prefs.getString(TASK_ID_KEY)
+            // Every Chrome profile of this task (one per set of secrets).
+            if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
+        }
+        return choice.status
+    }
+
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
 
     // Keyed by a task id the script stores in the task's own preferences (new task, new id: a deleted task's profile is
@@ -379,6 +402,8 @@ private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
 private const val TASK_ID_KEY = "taskId"
+private const val ON_NEXT_START_KEY = "onNextStart"
+private const val LEARNED_FROM_SCRATCH = "Learned from scratch (reset at start)."
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
 private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 2px solid #c4c8cf; border-radius: 10px; font-weight: 600; text-decoration: none"

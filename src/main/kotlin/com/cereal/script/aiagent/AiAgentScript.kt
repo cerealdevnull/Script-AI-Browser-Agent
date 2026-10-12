@@ -31,12 +31,16 @@ class AiAgentScript(
     // Repeat: consecutive iterations that failed transiently (page load, network, model 429/5xx after retries).
     private var transientFailures = 0
 
+    // The no-price line is shown once per task, before its first step.
+    private var priceAnnounced = false
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
         scrubber = null
         transientFailures = 0
+        priceAnnounced = false
         if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
@@ -65,6 +69,13 @@ class AiAgentScript(
                 log.error("Chrome could not be started: ${e.message}")
                 return report.error("Couldn't start Google Chrome.", cost = COST_ZERO)
             }
+        val modelId = modelId(configuration)
+        if (!priceAnnounced && Prices.cost(modelId, Usage(0, 0)) == null) {
+            val line = "No price known for $modelId: the \$ caps can't stop this task, only Max steps can."
+            log.warn(line)
+            statusUpdate(line)
+        }
+        priceAnnounced = true
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
             Agent(
@@ -273,12 +284,15 @@ class AiAgentScript(
 internal fun modelClient(config: AgentConfiguration): ModelClient {
     val provider = config.provider()
     val baseUrl = provider.baseUrl ?: config.baseUrl()!!.trim()
-    val model = config.model()?.trim()?.ifEmpty { null } ?: provider.recommendedModel!!
+    val model = modelId(config)
     return when (provider) {
         Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), model)
         else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), model)
     }
 }
+/** The model the task asks for: the chosen Model, else the preset's recommended one. */
+private fun modelId(config: AgentConfiguration) = config.model()?.trim()?.ifEmpty { null } ?: config.provider().recommendedModel!!
+
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val TASK_ID_KEY = "taskId"
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"

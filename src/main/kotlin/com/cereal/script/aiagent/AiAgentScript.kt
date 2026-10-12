@@ -38,6 +38,9 @@ class AiAgentScript(
     // The no-price line is shown once per task, before its first step.
     private var priceAnnounced = false
 
+    // True until the first execute() after a task start.
+    private var firstRun = true
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
@@ -46,6 +49,7 @@ class AiAgentScript(
         transientFailures = 0
         checked = false
         priceAnnounced = false
+        firstRun = true
         if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
@@ -159,13 +163,16 @@ class AiAgentScript(
         statusUpdate(verdict)
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
+        // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
+        val badStartUrl = firstRun && outcome is Outcome.Failed && outcome.startPage
+        firstRun = false
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
-        if (repeat && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
+        if (repeat && !badStartUrl && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
             return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
         }
         return when (outcome) {
-            is Outcome.Failed if repeat && outcome.transient ->
+            is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
                 report.error(
                     scrubber.forLog("The monitor stopped: $MAX_TRANSIENT_FAILURES checks in a row couldn't reach ${outcome.unreachable}."),
                     "Start the task again when it's back.",

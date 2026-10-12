@@ -46,9 +46,9 @@ sealed interface Outcome {
     /**
      * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
      * a page load, network or model 429/5xx failure couldn't reach after its retries ([transient]: a later attempt may
-     * work). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
+     * work; [startPage]: it was the start URL, so no step ran). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
      */
-    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null) : Outcome {
+    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null, val startPage: Boolean = false) : Outcome {
         val transient get() = unreachable != null
     }
 
@@ -138,6 +138,10 @@ class Agent(
     var healed = false
         private set
 
+    /** The start page didn't load: nothing to show the model, so the run ends before step 1. */
+    private fun startFailed(e: PageLoadException) =
+        Outcome.Failed("Couldn't open $startUrl (${e.reason}). Check the Start URL.", 0, unreachable = hostOf(startUrl) ?: startUrl, startPage = true)
+
     /** [resume]: set when healing a replay miss; the run then continues on the current page instead of the start URL. */
     suspend fun run(resume: String? = null): Outcome {
         val current =
@@ -150,8 +154,7 @@ class Agent(
                 lastUrl = browser.url()
                 "Current page:"
             } catch (e: PageLoadException) {
-                loadFailure = "navigate" + JsonObject(mapOf("url" to JsonPrimitive(startUrl)))
-                "Current page (error: ${e.message}):"
+                return startFailed(e)
             }
         messages +=
             Message.User(
@@ -444,7 +447,11 @@ class Agent(
         val miss =
             try {
                 status("Opening ${hostOf(startUrl) ?: startUrl}")
-                browser.navigate(startUrl)
+                try {
+                    browser.navigate(startUrl)
+                } catch (e: PageLoadException) {
+                    return startFailed(e)
+                }
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"

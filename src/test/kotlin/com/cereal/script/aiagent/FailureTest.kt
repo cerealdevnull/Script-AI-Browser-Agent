@@ -146,4 +146,17 @@ class FailureTest {
         assertEquals(2, model.requests.size)
         assertEquals("${result.message}\nThe site may be down. Try again later.\nCost: \$0.01", host.notifications.single().message)
     }
+
+    @Test
+    fun `a Start URL that won't load ends the first run before step 1, at no cost`() {
+        val model = ScriptedModel()
+
+        val result = run(model, startUrl = "https://practicesoftwaretestin.invalid")
+
+        val message = "Couldn't open https://practicesoftwaretestin.invalid (site not found). Check the Start URL."
+        assertIs<ExecutionResult.Error>(result)
+        assertEquals(message, result.message)
+        assertEquals("$message\nCost: \$0", host.notifications.single().message)
+        assertEquals(0, model.requests.size)
+    }
 }

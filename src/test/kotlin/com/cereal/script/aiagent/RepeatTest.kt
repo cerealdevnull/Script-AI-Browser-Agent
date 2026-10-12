@@ -342,6 +342,24 @@ class RepeatTest {
     }
 
     @Test
+    fun `a Start URL that won't load ends the first check, but a later check retries it`() {
+        val model = ScriptedModel(noCheck, noCheck, noCheck)
+        val bad = TestConfig(startUrl = "https://practicesoftwaretestin.invalid", runMode = RunMode.Repeat, repeatInterval = 7)
+
+        task(model, bad) { execute ->
+            val ended = assertIs<ExecutionResult.Error>(execute())
+            assertEquals("Couldn't open https://practicesoftwaretestin.invalid (site not found). Check the Start URL.", ended.message)
+        }
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            site.close()
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.logs.any { "transient failure 1 of 3" in it }, host.logs.joinToString("\n"))
+        }
+        assertEquals(3, model.requests.size)
+    }
+
+    @Test
     fun `a non-transient failure ends a monitor at once`() {
         val model = ScriptedModel({ throw ModelException("Model/API key rejected: HTTP 401: invalid x-api-key") })
 

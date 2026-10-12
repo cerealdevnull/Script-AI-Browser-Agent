@@ -39,8 +39,8 @@ private val HTTP = OkHttpClient.Builder().readTimeout(10, TimeUnit.MINUTES).call
 private val JSON = "application/json".toMediaType()
 
 /**
- * A local pass-through to the real Anthropic API that keeps every request body and response: the script's Base URL
- * points here, so this is exactly the model traffic that left the machine.
+ * A local pass-through to the real Anthropic API that keeps every request body and response: the script's Anthropic
+ * adapter points here, so this is exactly the model traffic that left the machine.
  */
 class ModelTraffic : AutoCloseable {
     class Exchange(val request: String, val code: Int, val response: String)

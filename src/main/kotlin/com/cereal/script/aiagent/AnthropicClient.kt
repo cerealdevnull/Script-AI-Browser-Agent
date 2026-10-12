@@ -14,9 +14,9 @@ import kotlinx.serialization.json.putJsonObject
 
 /** Anthropic Messages API over raw OkHttp (vendor SDKs don't load in the host's ScriptClassLoader). */
 class AnthropicClient(
-    private val baseUrl: String,
+    internal val baseUrl: String,
     private val apiKey: String,
-    private val model: String,
+    internal val model: String,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {

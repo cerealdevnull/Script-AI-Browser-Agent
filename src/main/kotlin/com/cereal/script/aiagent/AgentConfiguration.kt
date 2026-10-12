@@ -4,6 +4,10 @@ import com.cereal.sdk.ScriptConfiguration
 import com.cereal.sdk.ScriptConfigurationItem
 import com.cereal.sdk.ScriptConfigurationListItem
 import com.cereal.sdk.models.Secret
+import com.cereal.sdk.statemodifier.ScriptConfig
+import com.cereal.sdk.statemodifier.ScriptConfigValue
+import com.cereal.sdk.statemodifier.StateModifier
+import com.cereal.sdk.statemodifier.Visibility
 
 // keyNames are persisted by the host: never change them.
 interface AgentConfiguration : ScriptConfiguration {
@@ -37,36 +41,44 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 3,
         keyName = "provider",
         name = "Provider",
-        description = "Anthropic, or any OpenAI-compatible server (OpenAI, OpenRouter, Gemini, Ollama, LM Studio). Your API key is sent only to the base URL.",
+        description =
+            "The company that runs the AI. You pay them directly with your own API key. Anthropic is recommended. " +
+                "Google Gemini has a free tier with no card, but Google may use your content to improve its products. " +
+                "Custom: any OpenAI-compatible server, such as Ollama or LM Studio.",
     )
     fun provider(): Provider = Provider.Anthropic
 
     @ScriptConfigurationItem(
         position = 4,
-        keyName = "baseUrl",
-        name = "Base URL",
-        description =
-            "Leave empty for the provider's default (Anthropic: https://api.anthropic.com, OpenAI-compatible: https://api.openai.com/v1). " +
-                "E.g. https://openrouter.ai/api/v1, https://generativelanguage.googleapis.com/v1beta/openai, " +
-                "http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio).",
-    )
-    fun baseUrl(): String?
-
-    @ScriptConfigurationItem(
-        position = 5,
         keyName = "apiKey",
         name = "API key",
-        description = "Your own API key for the provider. Required for Anthropic; optional for OpenAI-compatible (local servers).",
+        description =
+            "Your key from the provider above, sent only to them. Get one at: Anthropic https://console.anthropic.com/settings/keys · " +
+                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys. Optional for Custom.",
+        stateModifier = ApiKeyState::class,
     )
     fun apiKey(): Secret?
 
     @ScriptConfigurationItem(
-        position = 6,
+        position = 5,
         keyName = "model",
         name = "Model",
-        description = "The model id, e.g. claude-opus-5-5.",
+        description =
+            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna). " +
+                "Required for Custom.",
+        stateModifier = ModelState::class,
     )
-    fun model(): String = "claude-opus-5-5"
+    fun model(): String?
+
+    // Was "Base URL"; the keyName stays.
+    @ScriptConfigurationItem(
+        position = 6,
+        keyName = "baseUrl",
+        name = "Server URL",
+        description = "Your server's OpenAI-compatible address, e.g. http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio).",
+        stateModifier = ServerUrlState::class,
+    )
+    fun baseUrl(): String?
 
     @ScriptConfigurationItem(
         position = 7,
@@ -191,4 +203,32 @@ fun AgentConfiguration.secrets(): Map<String, Secret> =
 
 enum class RunMode { Once, Repeat }
 
-enum class Provider { Anthropic, OpenAICompatible }
+/** A preset fixes the server and recommends a model; Custom takes both from the form. */
+enum class Provider(val baseUrl: String?, val recommendedModel: String?) {
+    Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5"),
+    Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
+    OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna"),
+    Custom(null, null),
+}
+
+private fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value ?: Provider.Anthropic
+
+private fun visibleRequiredIf(required: Boolean) = if (required) Visibility.VisibleRequired else Visibility.VisibleOptional
+
+object ApiKeyState : StateModifier {
+    override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() != Provider.Custom)
+
+    override fun getError(config: ScriptConfig): String? = null
+}
+
+object ModelState : StateModifier {
+    override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() == Provider.Custom)
+
+    override fun getError(config: ScriptConfig): String? = null
+}
+
+object ServerUrlState : StateModifier {
+    override fun getVisibility(config: ScriptConfig) = if (config.provider() == Provider.Custom) Visibility.VisibleRequired else Visibility.Hidden
+
+    override fun getError(config: ScriptConfig): String? = null
+}

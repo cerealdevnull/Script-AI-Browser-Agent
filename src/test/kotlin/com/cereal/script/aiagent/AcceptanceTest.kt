@@ -24,7 +24,8 @@ import kotlin.test.assertTrue
 
 /** One task start of the real script (real Anthropic adapter via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
 private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
-    private val script = AiAgentScript(profilesDir = profiles)
+    // Presets ignore the Server URL, so point the real Anthropic adapter at the recorder here.
+    private val script = AiAgentScript({ AnthropicClient(traffic.baseUrl, it.apiKey()!!.reveal(), it.model()!!) }, profiles)
     private val provider = host.create()
 
     /** One goal run (one execute), reported as a results row. */
@@ -103,7 +104,6 @@ class G1MonitorTest {
                 goal = "Notify me when Long Nose Pliers is back in stock",
                 startUrl = ui,
                 apiKey = Secret(key),
-                baseUrl = traffic.baseUrl,
                 model = ACCEPTANCE_MODEL,
                 runMode = RunMode.Repeat,
                 repeatInterval = 60,
@@ -157,7 +157,6 @@ class G2LoginReadTest {
             goal = goal,
             startUrl = Demo.url,
             apiKey = Secret(key),
-            baseUrl = traffic.baseUrl,
             model = ACCEPTANCE_MODEL,
             secrets = Demo.secrets,
             runMode = runMode,
@@ -246,7 +245,6 @@ class G3BuyTest {
                 goal = "Log in and buy one Claw Hammer, paying cash on delivery",
                 startUrl = Demo.url,
                 apiKey = Secret(key),
-                baseUrl = traffic.baseUrl,
                 model = ACCEPTANCE_MODEL,
                 secrets = Demo.secrets,
                 reLearn = true,

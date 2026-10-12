@@ -201,7 +201,7 @@ class AiAgentScript(
         // Between checks the task row tells when it checked and when it checks next; the times keep each line unique.
         val notYet =
             if (repeat && outcome is Outcome.Finished && !outcome.goalMet) {
-                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${usd(taskSpent).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
+                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${spent(taskSpent, taskUnpriced).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
             } else {
                 null
             }
@@ -224,6 +224,7 @@ class AiAgentScript(
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
         val badStartUrl = firstRun && outcome is Outcome.Failed && outcome.startPage
+        val learnedFromScratch = reset?.takeIf { firstRun }?.let { LEARNED_FROM_SCRATCH }
         firstRun = false
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && !badStartUrl && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
@@ -262,7 +263,7 @@ class AiAgentScript(
                 val met = (outcome.check ?: cache?.check)?.takeIf { repeat }?.let { scrubber.forLog("Now holds: ${it.words()}") }
                 val total = "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}"
                 val stale = replayed && !outcome.goalMet && learnedMet
-                report.notify(met ?: verdict, FORGET_STEPS.takeIf { stale }, details = answer.drop(1) + readouts + listOfNotNull(reset?.let { LEARNED_FROM_SCRATCH }), cost = if (repeat) total else cost())
+                report.notify(met ?: verdict, FORGET_STEPS.takeIf { stale }, details = answer.drop(1) + readouts + listOfNotNull(learnedFromScratch), cost = if (repeat) total else cost())
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(met ?: verdict)
             }
@@ -402,8 +403,10 @@ class AiAgentScript(
                 positiveError("Max steps per run", config.maxSteps()),
                 positiveError("Max \$ per run", config.maxRunCost()),
                 positiveError("Max \$ per task", config.maxTaskCost()),
-                positiveError("Check every", config.repeatInterval()),
-            ) + slots.indices.flatMap { i -> secretSlotErrors(slots, i).toList().filterNotNull() }
+                positiveError("Check every", config.repeatInterval()).takeIf { config.runMode() == RunMode.Repeat },
+            ) +
+                // Only the slots the form shows (as SecretState): slot 1, or slot N once slot N-1 has a label.
+                slots.indices.filter { i -> i == 0 || slots[i - 1].first != null }.flatMap { i -> secretSlotErrors(slots, i).toList().filterNotNull() }
         if (errors.isEmpty()) return null
         return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
@@ -447,7 +450,7 @@ internal fun modelClient(config: AgentConfiguration): ModelClient {
     val baseUrl = provider.baseUrl ?: config.baseUrl()!!.trim()
     return when (provider) {
         Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), config.modelId())
-        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), config.modelId())
+        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), config.modelId(), custom = provider == Provider.Custom)
     }
 }
 
@@ -482,7 +485,7 @@ private const val COST_ZERO = "Cost: \$0"
 private fun spent(amount: Double, unpriced: Set<String?>) =
     when {
         unpriced.isEmpty() -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
-        amount == 0.0 -> "unknown (no price for ${unpriced.joinToString()})"
+        amount == 0.0 -> "unknown (no price for ${unpriced.map { it ?: "unknown model" }.joinToString()})"
         else -> "${usd(amount)} + unknown"
     }
 

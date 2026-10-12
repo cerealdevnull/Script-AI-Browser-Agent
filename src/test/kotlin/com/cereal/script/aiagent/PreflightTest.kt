@@ -87,6 +87,13 @@ class PreflightTest {
             assertEquals(Preflight.NoTools, client("x/no-tools").check())
             assertEquals("/models", api.takeRequest().url.encodedPath)
 
+            reply(200, """{"data":[{"id":"openai/gpt-5.6-luna"}]}""")
+            assertNull(client("openai/gpt-5.6-luna:nitro").check(), "an OpenRouter variant suffix matches its base id")
+            reply(200, list)
+            assertNull(OpenAiCompatibleClient(base, null, "my-alias", custom = true) { }.check(), "a Custom server may serve unlisted aliases")
+            reply(200, """{"data":{"models":[]}}""")
+            assertNull(client("gpt-5.6-luna").check(), "a list in another shape can't tell")
+
             reply(404)
             assertNull(client("llama3").check(), "a Custom server without a models endpoint skips the check")
             reply(403)

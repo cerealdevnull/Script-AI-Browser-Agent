@@ -89,6 +89,34 @@ class RepeatTest {
             "check": {"ref": "${request.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}}"""
 
     @Test
+    fun `between checks an unpriced model's task total shows as unknown, never $0`() {
+        stock("Out of stock")
+        val clock = TestClock(Instant.parse("2026-10-12T14:32:00Z"))
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", notMet(it))) },
+                models = listOf("llama3", "llama3"),
+            )
+
+        task(model, config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
+            assertEquals("Not yet · checked 14:32 · next 14:47 · unknown (no price for llama3) of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
+        }
+    }
+
+    @Test
+    fun `the reset note shows only on the first check's result`() {
+        stock("Out of stock")
+
+        task(learning(), config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            stock("In stock")
+            assertIs<ExecutionResult.Success>(execute())
+        }
+        assertFalse("Learned from scratch" in host.notifications.last().message, host.notifications.last().message)
+    }
+
+    @Test
     fun `a monitor says once what it watches, stays quiet on later checks, and notifies once when the stock flips`() {
         stock("Out of stock")
         val model = learning()

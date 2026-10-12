@@ -22,6 +22,8 @@ class OpenAiCompatibleClient(
     internal val baseUrl: String,
     private val apiKey: String?,
     internal val model: String,
+    /** A Custom server: it may serve ids its list leaves out, and gets no OpenRouter-only cache_control. */
+    private val custom: Boolean = false,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {
@@ -91,16 +93,18 @@ class OpenAiCompatibleClient(
                 // A Custom server without a models endpoint can't tell.
                 return if (e.status == 404) null else preflight(e)
             }
-        val entry = json["data"]?.jsonArray.orEmpty().map { it.jsonObject }.firstOrNull { it.str("id")?.removePrefix("models/") == model }
+        // A list in another shape can't tell. OpenRouter serves `<id>:nitro` etc. without listing them.
+        val data = json["data"] as? JsonArray ?: return null
+        val entry = data.mapNotNull { it as? JsonObject }.firstOrNull { it.str("id")?.removePrefix("models/").let { id -> id == model || id == model.substringBefore(':') } }
         val params = entry?.get("supported_parameters") as? JsonArray
         return when {
-            entry == null -> Preflight.UnknownModel
+            entry == null -> if (custom) null else Preflight.UnknownModel
             params != null && params.none { (it as? JsonPrimitive)?.content == "tools" } -> Preflight.NoTools
             else -> null
         }
     }
 
-    private val claude = "claude" in model.lowercase()
+    private val claude = !custom && "claude" in model.lowercase()
 
     private fun cached(message: JsonObject): JsonObject {
         val parts =

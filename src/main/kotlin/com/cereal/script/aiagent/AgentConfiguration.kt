@@ -247,13 +247,15 @@ fun modelError(provider: Provider, model: String?): String? {
 }
 
 /** The preset an id clearly belongs to; null when unknown (the pre-flight judges those). */
-private fun modelOwner(id: String) =
-    when {
-        "/" in id -> Provider.OpenRouter
-        id.startsWith("claude-") -> Provider.Anthropic
-        id.startsWith("gemini-") -> Provider.Gemini
-        id.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(id) -> Provider.OpenAI
-        else -> null
+private fun modelOwner(model: String) =
+    model.removePrefix("models/").let { id -> // `models/<id>` is Gemini's own form, not OpenRouter's
+        when {
+            "/" in id -> Provider.OpenRouter
+            id.startsWith("claude-") -> Provider.Anthropic
+            id.startsWith("gemini-") -> Provider.Gemini
+            id.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(id) -> Provider.OpenAI
+            else -> null
+        }
     }
 
 fun serverUrlError(provider: Provider, baseUrl: String?) = if (provider == Provider.Custom && baseUrl.isNullOrBlank()) "Server URL is required for Custom" else null

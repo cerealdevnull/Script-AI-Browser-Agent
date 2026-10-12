@@ -14,6 +14,7 @@
 - **Readout**: a labelled element whose text is reported verbatim.
 - **irreversible step**: an action that buys, pays, deletes, sends or similar; it needs a confirmation.
 - **confirmation**: the Confirm/Decline dialog shown before an irreversible step.
+- **consent reject**: the script declining a cookie consent banner itself, before the model sees the page; it is never a step.
 - **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.

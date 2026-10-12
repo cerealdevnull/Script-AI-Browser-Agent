@@ -60,7 +60,7 @@ class ProviderPresetTest {
     }
 
     @Test
-    fun `a preset needs an API key`() = assertRejected(TestConfig(provider = Provider.Gemini, apiKey = null), "API key is required for Gemini")
+    fun `a preset needs an API key`() = assertRejected(TestConfig(provider = Provider.Gemini, apiKey = null, model = null), "API key is required for Gemini")
 
     @Test
     fun `Custom needs a Model`() = assertRejected(TestConfig(provider = Provider.Custom, baseUrl = "http://localhost:1/v1", model = " "), "Model is required for Custom")
@@ -77,6 +77,6 @@ class ProviderPresetTest {
     private fun assertRejected(config: TestConfig, reason: String) =
         runBlocking {
             val result = Host().run(AiAgentScript({ ScriptedModel() }, tempProfiles()), config)
-            assertEquals(reason, assertIs<ExecutionResult.Error>(result).message)
+            assertEquals("Fix these in the task settings: $reason.", assertIs<ExecutionResult.Error>(result).message)
         }
 }

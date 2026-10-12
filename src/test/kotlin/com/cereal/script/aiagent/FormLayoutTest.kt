@@ -4,6 +4,9 @@ import com.cereal.sdk.models.Secret
 import com.cereal.sdk.statemodifier.ScriptConfig
 import com.cereal.sdk.statemodifier.ScriptConfigValue
 import com.cereal.sdk.statemodifier.Visibility
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -94,6 +97,18 @@ class FormLayoutTest {
         listOf("maxSteps", "maxRunCost", "maxTaskCost").forEach {
             assertEquals(com.cereal.sdk.statemodifier.DefaultStateModifier::class.java, items.getValue(it).stateModifier.java, it)
         }
+    }
+
+    @Test
+    fun `the manifest instructions are a short quick start in form order`() {
+        val manifest = javaClass.getResource("/manifest.json")!!.readText()
+        val text = Json.parseToJsonElement(manifest).jsonObject.getValue("instructions").jsonPrimitive.content
+        assertTrue(text.length <= 360, "${text.length} chars") // "under about 350"
+        assertTrue(text.split(". ").size in 3..4, text)
+        val order = listOf("provider", "API key", "goal", "start URL", "Once", "Repeat", "Chrome", "asks before", "\$0.20", "\$2")
+        assertEquals(order.sortedBy { text.indexOf(it) }, order, text)
+        assertTrue(order.all { it in text }, text)
+        listOf("Secret", "Allowed domains", "On next start").forEach { assertTrue(it !in text, it) }
     }
 
     private fun form(vararg values: Pair<String, ScriptConfigValue>) =

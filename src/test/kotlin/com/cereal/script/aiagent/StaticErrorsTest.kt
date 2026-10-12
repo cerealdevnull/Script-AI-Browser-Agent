@@ -38,6 +38,29 @@ class StaticErrorsTest {
     }
 
     @Test
+    fun `a Model from another preset is flagged at Save`() {
+        fun model(provider: Provider, id: String) =
+            error("model", "provider" to EnumScriptConfigValue(provider), "model" to StringScriptConfigValue(id))
+        assertEquals(
+            "`gpt-5.6-luna` is an OpenAI model. Clear Model to use Anthropic's recommended model.",
+            model(Provider.Anthropic, "gpt-5.6-luna"),
+        )
+        assertEquals("`o4-mini` is an OpenAI model. Clear Model to use Gemini's recommended model.", model(Provider.Gemini, "o4-mini"))
+        assertEquals("`claude-sonnet-5-5` is an Anthropic model. Clear Model to use OpenAI's recommended model.", model(Provider.OpenAI, "claude-sonnet-5-5"))
+        assertEquals("`gemini-3.8-flash` is a Gemini model. Clear Model to use OpenRouter's recommended model.", model(Provider.OpenRouter, "gemini-3.8-flash"))
+        assertEquals(
+            "`anthropic/claude-sonnet-5.5` is an OpenRouter model. Clear Model to use Anthropic's recommended model.",
+            model(Provider.Anthropic, "anthropic/claude-sonnet-5.5"),
+        )
+        assertNull(model(Provider.OpenAI, "gpt-5.6-luna"))
+        assertNull(model(Provider.OpenRouter, "openai/gpt-5.6-luna"))
+        assertNull(model(Provider.Anthropic, "my-finetune"))
+        assertNull(model(Provider.Anthropic, "opus"))
+        assertNull(model(Provider.Custom, "gpt-5.6-luna"))
+        assertNull(model(Provider.Custom, "anthropic/claude-sonnet-5.5"))
+    }
+
+    @Test
     fun `a hidden Server URL is ignored unless Provider is Custom`() {
         assertNull(error("baseUrl", "baseUrl" to StringScriptConfigValue("not a url")))
         assertEquals("Server URL is required for Custom", error("baseUrl", "provider" to EnumScriptConfigValue(Provider.Custom)))

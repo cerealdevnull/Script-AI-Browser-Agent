@@ -8,7 +8,8 @@ interface ModelClient {
     suspend fun send(request: ModelRequest): ModelTurn
 }
 
-class ModelRequest(val system: String, val tools: List<ToolDef>, val messages: List<Message>)
+/** [onRetry]: called with the wait in ms before each retry of a busy (429/5xx) or unreachable provider. */
+class ModelRequest(val system: String, val tools: List<ToolDef>, val messages: List<Message>, val onRetry: suspend (Long) -> Unit = {})
 
 /** [schema] is a JSON schema object; the script validates every tool call against it. */
 class ToolDef(val name: String, val description: String, val schema: JsonObject)

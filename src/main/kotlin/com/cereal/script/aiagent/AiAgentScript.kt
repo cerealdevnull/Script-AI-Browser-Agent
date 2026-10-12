@@ -80,11 +80,12 @@ class AiAgentScript(
                 configuration.allowedDomainSet(),
                 {
                     log.info(scrubber.forLog("Asking to confirm: ${it.action} on ${it.element} at ${it.url}"))
-                    statusUpdate(scrubber.forLog("Waiting for your confirmation: ${it.action} on ${it.element}"))
+                    statusUpdate(scrubber.forLog("Waiting for your OK: ${it.question}"))
                     confirm(configuration, provider, scrubber, it)
                 },
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
+                configuration.provider().takeIf { it != Provider.Custom }?.name ?: "The model server",
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)

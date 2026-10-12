@@ -3,6 +3,8 @@ package com.cereal.script.aiagent
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
 import java.security.MessageDigest
 
@@ -47,6 +49,20 @@ class Check(val fingerprint: String, val condition: String, val expected: String
             "textContains" -> expected in match.text
             "textAbsent" -> expected !in match.text
             else -> match.enabled
+        }
+    }
+
+    /** The condition in words for notifications (never "Check"): `Long Nose Pliers shows “In stock”`. */
+    fun words(): String {
+        val fp = Json.parseToJsonElement(fingerprint).jsonObject
+        // Named by its anchor (heading/label) or column header; else the page.
+        val where = (fp["anchor"]?.jsonObject?.get("text") ?: fp["column"])?.jsonPrimitive?.content ?: "the page"
+        val tag = fp["tag"]?.jsonPrimitive?.content ?: "element"
+        return when (condition) {
+            "textContains" -> "$where shows “$expected”"
+            "textAbsent" -> "$where no longer shows “$expected”"
+            "enabled" -> "the $tag at $where is enabled"
+            else -> "the $tag at $where appears"
         }
     }
 

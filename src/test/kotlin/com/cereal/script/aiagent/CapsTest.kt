@@ -44,16 +44,21 @@ class CapsTest {
     }
 
     @Test
-    fun `the step cap stops the run with Error and a notification`() {
+    fun `the step cap stops the run with Error and a raise-or-reword action`() {
         // An invalid-arguments turn counts as a step too.
-        val model = ScriptedModel({ listOf(call("click", """{"ref": "x"}""")) }, readForever, readForever)
+        val model = ScriptedModel({ listOf(call("click", """{"ref": "x"}""")) }, readForever, readForever, readForever)
 
-        val result = run(model, maxSteps = 2)
+        val result = run(model, maxSteps = 3)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Step/cost limit reached: max steps per run (2)", result.message)
-        assertEquals("Step/cost limit reached: max steps per run (2)\nCost: \$0.01", host.notifications.single().message)
-        assertEquals(2, model.requests.size)
+        assertEquals("Stopped after 3 steps, the Max steps per run limit.", result.message)
+        assertEquals(
+            "Stopped after 3 steps, the Max steps per run limit.\n" +
+                "If the agent was making progress, raise Max steps per run. Otherwise make the goal more specific.\nCost: \$0.02",
+            host.notifications.single().message,
+        )
+        assertEquals("Stopped after 3 steps, the Max steps per run limit.", host.statuses.last())
+        assertEquals(3, model.requests.size)
     }
 
     @Test
@@ -63,8 +68,8 @@ class CapsTest {
         val result = run(model, maxRunCost = 0.01)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Step/cost limit reached: max \$ per run (\$0.01)", result.message)
-        assertEquals("Step/cost limit reached: max \$ per run (\$0.01)\nCost: \$0.01", host.notifications.single().message)
+        assertEquals("Stopped at \$0.01, the Max \$ per run limit.", result.message)
+        assertEquals("Stopped at \$0.01, the Max \$ per run limit.\nRaise Max \$ per run to let it go further.\nCost: \$0.01", host.notifications.single().message)
     }
 
     @Test
@@ -74,7 +79,8 @@ class CapsTest {
         val result = run(model, maxTaskCost = 0.01)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Step/cost limit reached: max \$ per task (\$0.01)", result.message)
+        assertEquals("This task has spent \$0.01, its Max \$ per task limit.", result.message)
+        assertEquals("Raise Max \$ per task to keep it running.", host.notifications.single().message.lines()[1])
         assertEquals(2, model.requests.size)
     }
 
@@ -85,7 +91,7 @@ class CapsTest {
         val result = run(model, maxSteps = 2, maxRunCost = 0.001)
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Step/cost limit reached: max steps per run (2)", result.message)
+        assertEquals("Stopped after 2 steps, the Max steps per run limit.", result.message)
         assertTrue(host.notifications.single().message.endsWith("\nCost: \$0"))
         assertEquals(1, host.logs.count { it == "WARN no price known for model llama3.3:70b: counted as \$0, only the step cap applies" })
     }

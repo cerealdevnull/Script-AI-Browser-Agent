@@ -44,13 +44,16 @@ sealed interface Outcome {
     ) : Outcome
 
     /**
-     * [transient]: a page load, network or model 429/5xx failure that outlasted its retries; a later attempt may work.
-     * Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
+     * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
+     * a page load, network or model 429/5xx failure couldn't reach after its retries ([transient]: a later attempt may
+     * work). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
      */
-    class Failed(val reason: String, override val steps: Int, val transient: Boolean = false) : Outcome
+    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null) : Outcome {
+        val transient get() = unreachable != null
+    }
 
     /** A step or cost cap was hit. */
-    class Stopped(val reason: String, override val steps: Int) : Outcome
+    class Stopped(val reason: String, override val steps: Int, val action: String) : Outcome
 
     /** The user declined (or closed) the confirmation of [step]. */
     class Declined(val step: Confirmation, override val steps: Int) : Outcome
@@ -113,8 +116,8 @@ class Agent(
     private val runMode: RunMode = RunMode.Once,
     /** The task's one-line status in the Cereal UI: what the agent is doing right now. */
     private val status: suspend (String) -> Unit = {},
-    /** Who is busy when a model call is retried: "Anthropic is busy, retrying in 20 s". */
-    private val providerName: String = "The model",
+    /** Who serves the model, as user text names it: "Anthropic", "your server". */
+    private val providerName: String = "the model provider",
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
@@ -158,15 +161,22 @@ class Agent(
                 ),
             )
         while (true) {
-            capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
+            capReached()?.let { return it }
             status("${progress(steps + 1)} · Thinking…")
             // Retries and rate-limit waits happen inside send(): they are not steps.
-            val onRetry: suspend (Long) -> Unit = { status("${progress(steps + 1)} · $providerName is busy, retrying in ${(it + 999) / 1000} s") }
+            val onRetry: suspend (Long) -> Unit = { status("${progress(steps + 1)} · ${providerName.cap()} is busy, retrying in ${(it + 999) / 1000} s") }
             val turn =
                 try {
                     model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList(), onRetry))
                 } catch (e: ModelException) {
-                    return Outcome.Failed(e.message!!, steps, e.transient)
+                    warn("step ${steps + 1}: the model call failed: ${e.message}")
+                    // ponytail: the cause is parsed from the message; give ModelException fields if more wording needs it.
+                    val message = e.message!!
+                    // A rejected key arrives already worded by the pre-flight (#58).
+                    if (e.status == 401 || e.status == 403) return Outcome.Failed(message, steps)
+                    if (!e.transient) return Outcome.Failed("${providerName.cap()} returned an error: ${sentence(message.substringAfter(": "))}", steps, "Start the task again.")
+                    val cause = HTTP_STATUS.find(message)?.value ?: "network error"
+                    return Outcome.Failed("Couldn't reach $providerName ($cause).", steps, "Try again later.", unreachable = providerName)
                 }
             steps++
             messages += Message.Assistant(turn)
@@ -182,10 +192,13 @@ class Agent(
                 "step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} " +
                     "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
-            if (turn.stopReason == "refusal") return Outcome.Failed("Model refused: ${turn.text ?: "no reason given"}", steps)
+            if (turn.stopReason == "refusal") {
+                val why = sentence(turn.text?.takeIf { it.isNotBlank() } ?: "no reason given")
+                return Outcome.Failed("${providerName.cap()}'s model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
+            }
             if (turn.toolCalls.isEmpty()) {
                 warn("step $steps: the model stopped without calling finish (stop reason: ${turn.stopReason})")
-                return Outcome.Failed("The model stopped without an answer.", steps)
+                return Outcome.Failed("The model stopped without an answer.", steps, "Start the task again.")
             }
 
             val results = mutableListOf<ToolResult>()
@@ -211,11 +224,14 @@ class Agent(
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
                         continue
                     }
-                    "fail" -> return Outcome.Failed(call.args.str("reason"), steps)
+                    "fail" -> return Outcome.Failed("The agent gave up: ${sentence(call.args.str("reason").trim().take(300))}", steps)
                 }
                 status("${progress(steps)} · ${activity(call)}")
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
-                if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
+                if (seen >= 2 * STUCK_REPEATS) {
+                    val page = runCatching { browser.url() }.getOrNull() ?: lastUrl ?: startUrl
+                    return Outcome.Failed("The agent got stuck repeating the same action on $page.", steps, "Make the goal more specific, then start the task again.")
+                }
                 val target =
                     (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let {
                         try {
@@ -238,7 +254,7 @@ class Agent(
                         return Outcome.Declined(e.step, steps)
                     } catch (e: PageLoadException) {
                         val key = call.name + call.args
-                        if (key == loadFailure) return Outcome.Failed("Page load failed: ${e.message}", steps, transient = true)
+                        if (key == loadFailure) return loadFailed(e, (call.args["url"] as? JsonPrimitive)?.contentOrNull, steps)
                         loadFailure = key
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     } catch (e: Exception) {
@@ -274,13 +290,25 @@ class Agent(
         }
     }
 
-    private fun capReached(): String? =
+    private fun capReached(): Outcome.Stopped? =
         when {
-            steps >= caps.maxSteps -> "max steps per run (${caps.maxSteps})"
-            cost >= caps.maxRunCost -> "max \$ per run (${usd(caps.maxRunCost)})"
-            caps.taskSpent + cost >= caps.maxTaskCost -> "max \$ per task (${usd(caps.maxTaskCost)})"
+            steps >= caps.maxSteps ->
+                Outcome.Stopped(
+                    "Stopped after ${stepCount(caps.maxSteps)}, the Max steps per run limit.",
+                    steps,
+                    "If the agent was making progress, raise Max steps per run. Otherwise make the goal more specific.",
+                )
+            cost >= caps.maxRunCost -> Outcome.Stopped("Stopped at ${usd(caps.maxRunCost)}, the Max \$ per run limit.", steps, "Raise Max \$ per run to let it go further.")
+            caps.taskSpent + cost >= caps.maxTaskCost ->
+                Outcome.Stopped("This task has spent ${usd(caps.maxTaskCost)}, its Max \$ per task limit.", steps, "Raise Max \$ per task to keep it running.")
             else -> null
         }
+
+    /** [url]: the page asked for, when known; else the one that timed out, or the last one loaded. */
+    private suspend fun loadFailed(e: PageLoadException, url: String?, steps: Int): Outcome.Failed {
+        val page = url ?: e.url ?: lastUrl ?: startUrl
+        return Outcome.Failed("Couldn't load $page (${e.reason}).", steps, "The site may be down. Try again later.", unreachable = hostOf(page) ?: page)
+    }
 
     /** What makes two actions "the same" for stuck detection: page, tool, target (by fingerprint, not ref) and args. */
     private suspend fun actionKey(call: ToolCall): String {
@@ -462,7 +490,7 @@ class Agent(
             } catch (e: DeclinedException) {
                 return Outcome.Declined(e.step, 0)
             } catch (e: PageLoadException) {
-                return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
+                return loadFailed(e, null, 0)
             } catch (e: Exception) {
                 Miss("$at: ${e.message}", "$failed: ${e.message}")
             }
@@ -746,3 +774,10 @@ class Agent(
         private fun JsonObject.bool(key: String) = getValue(key).jsonPrimitive.boolean
     }
 }
+
+private val HTTP_STATUS = Regex("HTTP \\d+")
+
+/** Ends [s] as a sentence: adds a full stop unless it already ends in one. */
+private fun sentence(s: String) = s.trimEnd().let { if (it.endsWith('.') || it.endsWith('!') || it.endsWith('?')) it else "$it." }
+
+private fun String.cap() = replaceFirstChar(Char::uppercase)

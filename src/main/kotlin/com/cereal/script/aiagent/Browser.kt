@@ -269,9 +269,9 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             action()
             delay(300)
             tab.waitForReadyState(ReadyState.COMPLETE, pageLoadTimeoutMs)
-        } ?: throw PageLoadException("${url()} did not finish loading within ${pageLoadTimeoutMs / 1000} s")
+        } ?: url().let { throw PageLoadException("$it did not finish loading within ${pageLoadTimeoutMs / 1000} s", "timed out", it) }
         delay(300)
-        if (url().startsWith("chrome-error:")) throw PageLoadException("network error: the page could not be loaded")
+        if (url().startsWith("chrome-error:")) throw PageLoadException("network error: the page could not be loaded", "network error")
     }
 
     companion object {
@@ -424,7 +424,8 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 class FormInfo(val inForm: Boolean, val clickSubmits: Boolean, val submitName: String, val passwordNode: Int?)
 
 /** A page didn't load: a timeout or a network error. Transient: a later attempt may work. */
-class PageLoadException(message: String) : Exception(message)
+/** [message] for the model and the log; [reason] the short cause for the user; [url] the page, unless it's Chrome's error page. */
+class PageLoadException(message: String, val reason: String, val url: String? = null) : Exception(message)
 
 /** A node a [Fingerprint] matched on the live page. */
 class Match(val text: String, val enabled: Boolean)

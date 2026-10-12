@@ -18,6 +18,7 @@ interface AgentConfiguration : ScriptConfiguration {
         description =
             "What the agent should do, in plain language. Once: tell me whether Long Nose Pliers is in stock. " +
                 "Repeat: notify me when Long Nose Pliers is in stock.",
+        stateModifier = GoalState::class,
     )
     fun goal(): String
 
@@ -26,6 +27,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "startUrl",
         name = "Start URL",
         description = "The page the agent starts on, e.g. https://example.com.",
+        stateModifier = StartUrlState::class,
     )
     fun startUrl(): String
 
@@ -98,6 +100,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "maxSteps",
         name = "Max steps per run",
         description = "Each model call is one step. A run that reaches this many steps stops.",
+        stateModifier = MaxStepsState::class,
     )
     fun maxSteps(): Int = 40
 
@@ -108,6 +111,7 @@ interface AgentConfiguration : ScriptConfiguration {
         description =
             "A run stops once its model calls have cost this many dollars. " +
                 "A typical run on the recommended model costs about \$0.20; simple goals less, long ones up to \$1.",
+        stateModifier = MaxRunCostState::class,
     )
     fun maxRunCost(): Double = 2.0
 
@@ -116,6 +120,7 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "maxTaskCost",
         name = "Max $ per task",
         description = "The task stops once all its runs together have cost this many dollars. Resets when the task restarts.",
+        stateModifier = MaxTaskCostState::class,
     )
     fun maxTaskCost(): Double = 5.0
 
@@ -205,8 +210,39 @@ interface AgentConfiguration : ScriptConfiguration {
 
 /** The start URL's eTLD+1 plus the user's Allowed domains. */
 fun AgentConfiguration.allowedDomainSet(): Set<String> =
-    (listOfNotNull(hostOf(startUrl().trim())?.let(::registrableDomain)) + allowedDomains().orEmpty().mapNotNull { normalizeDomain(it.domain()) })
+    (listOfNotNull(hostOf(startPage())?.let(::registrableDomain)) + allowedDomains().orEmpty().mapNotNull { normalizeDomain(it.domain()) })
         .toSet()
+
+/** The Start URL as the agent opens it: `https://` added when the user typed none. */
+fun AgentConfiguration.startPage(): String = normalizeStartUrl(startUrl()) ?: startUrl().trim()
+
+private val HAS_SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:(?![0-9])")
+
+/** An http(s) URL with a host, `https://` added when there is no scheme (a `host:port` has none); else null. */
+fun normalizeStartUrl(raw: String): String? {
+    val trimmed = raw.trim()
+    val url = if (HAS_SCHEME.containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return null
+    return url.takeIf { uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrEmpty() }
+}
+
+// The static checks, shared by the form (StateModifier.getError) and the run's own validation.
+fun goalError(goal: String?) = if (goal.isNullOrBlank()) "Goal is required" else null
+
+fun startUrlError(startUrl: String?) =
+    when {
+        startUrl.isNullOrBlank() -> "Start URL is required"
+        normalizeStartUrl(startUrl) == null -> "Start URL must be an http(s) URL"
+        else -> null
+    }
+
+fun apiKeyError(provider: Provider, apiKey: String?) = if (provider != Provider.Custom && apiKey.isNullOrBlank()) "API key is required for $provider" else null
+
+fun modelError(provider: Provider, model: String?) = if (provider == Provider.Custom && model.isNullOrBlank()) "Model is required for Custom" else null
+
+fun serverUrlError(provider: Provider, baseUrl: String?) = if (provider == Provider.Custom && baseUrl.isNullOrBlank()) "Server URL is required for Custom" else null
+
+fun positiveError(name: String, value: Number?) = if (value != null && value.toDouble() <= 0) "$name must be > 0" else null
 
 /** One slot as (trimmed label, value); blank counts as empty. */
 private fun slot(label: String?, value: Secret?) = label?.trim()?.ifEmpty { null } to value?.takeIf { it.reveal().isNotEmpty() }
@@ -264,33 +300,62 @@ enum class Provider(val baseUrl: String?, val recommendedModel: String?, val key
     Custom(null, null, null),
 }
 
-private fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value ?: Provider.Anthropic
+private fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value as? Provider ?: Provider.Anthropic
+
+private fun ScriptConfig.string(key: String) = (valueForKey(key) as? ScriptConfigValue.StringScriptConfigValue)?.value
+
+private fun ScriptConfig.number(key: String): Number? =
+    when (val v = valueForKey(key)) {
+        is ScriptConfigValue.IntScriptConfigValue -> v.value
+        is ScriptConfigValue.DoubleScriptConfigValue -> v.value
+        is ScriptConfigValue.FloatScriptConfigValue -> v.value
+        else -> null
+    }
 
 private fun visibleRequiredIf(required: Boolean) = if (required) Visibility.VisibleRequired else Visibility.VisibleOptional
+
+/** An always-visible field with only a static error. */
+abstract class ErrorOnlyState(private val error: (ScriptConfig) -> String?) : StateModifier {
+    override fun getVisibility(config: ScriptConfig) = Visibility.VisibleOptional
+
+    override fun getError(config: ScriptConfig) = error(config)
+}
+
+object GoalState : ErrorOnlyState({ goalError(it.string("goal")) })
+
+object StartUrlState : ErrorOnlyState({ startUrlError(it.string("startUrl")) })
+
+object MaxStepsState : ErrorOnlyState({ positiveError("Max steps per run", it.number("maxSteps")) })
+
+object MaxRunCostState : ErrorOnlyState({ positiveError("Max \$ per run", it.number("maxRunCost")) })
+
+object MaxTaskCostState : ErrorOnlyState({ positiveError("Max \$ per task", it.number("maxTaskCost")) })
 
 object ApiKeyState : StateModifier {
     override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() != Provider.Custom)
 
-    override fun getError(config: ScriptConfig): String? = null
+    override fun getError(config: ScriptConfig) =
+        apiKeyError(config.provider(), (config.valueForKey("apiKey") as? ScriptConfigValue.SecretScriptConfigValue)?.value?.reveal())
 }
 
 object ModelState : StateModifier {
     override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() == Provider.Custom)
 
-    override fun getError(config: ScriptConfig): String? = null
+    override fun getError(config: ScriptConfig) = modelError(config.provider(), config.string("model"))
 }
 
 object ServerUrlState : StateModifier {
     override fun getVisibility(config: ScriptConfig) = if (config.provider() == Provider.Custom) Visibility.VisibleRequired else Visibility.Hidden
 
-    override fun getError(config: ScriptConfig): String? = null
+    override fun getError(config: ScriptConfig) = serverUrlError(config.provider(), config.string("baseUrl"))
 }
 
 object CheckEveryState : StateModifier {
-    override fun getVisibility(config: ScriptConfig) =
-        if ((config.valueForKey("runMode") as? ScriptConfigValue.EnumScriptConfigValue)?.value == RunMode.Repeat) Visibility.VisibleRequired else Visibility.Hidden
+    private fun repeat(config: ScriptConfig) = (config.valueForKey("runMode") as? ScriptConfigValue.EnumScriptConfigValue)?.value == RunMode.Repeat
 
-    override fun getError(config: ScriptConfig): String? = null
+    override fun getVisibility(config: ScriptConfig) = if (repeat(config)) Visibility.VisibleRequired else Visibility.Hidden
+
+    override fun getError(config: ScriptConfig) = if (repeat(config)) positiveError("Check every", config.number("repeatInterval")) else null
 }
 
 /** Secret slot N shows once slot N-1 has a label; its errors show under the label or the value field. */

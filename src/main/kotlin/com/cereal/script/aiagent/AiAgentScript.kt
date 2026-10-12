@@ -10,7 +10,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Clock
@@ -116,7 +115,7 @@ class AiAgentScript(
                         }
                 },
                 configuration.goal(),
-                configuration.startUrl().trim(),
+                configuration.startPage(),
                 caps,
                 { log.info(scrubber.forLog(it)) },
                 { log.warn(scrubber.forLog(it)) },
@@ -352,22 +351,17 @@ class AiAgentScript(
         provider.notification().sendNotification(Notification(title, body, telegramMessage = TelegramMessage(text = body)))
     }
 
-    private fun validate(config: AgentConfiguration): String? {
-        val scheme = runCatching { URI(config.startUrl().trim()).scheme?.lowercase() }.getOrNull()
-        return when {
-            config.goal().isBlank() -> "Goal is required"
-            config.startUrl().isBlank() -> "Start URL is required"
-            scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
-            config.provider() != Provider.Custom && config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for ${config.provider()}"
-            config.provider() == Provider.Custom && config.model().isNullOrBlank() -> "Model is required for Custom"
-            config.provider() == Provider.Custom && config.baseUrl().isNullOrBlank() -> "Server URL is required for Custom"
-            config.maxSteps() <= 0 -> "Max steps per run must be > 0"
-            config.maxRunCost() <= 0 -> "Max \$ per run must be > 0"
-            config.maxTaskCost() <= 0 -> "Max \$ per task must be > 0"
-            config.repeatInterval() <= 0 -> "Check every must be > 0"
-            else -> validateSecrets(config)
-        }
-    }
+    private fun validate(config: AgentConfiguration): String? =
+        goalError(config.goal())
+            ?: startUrlError(config.startUrl())
+            ?: apiKeyError(config.provider(), config.apiKey()?.reveal())
+            ?: modelError(config.provider(), config.model())
+            ?: serverUrlError(config.provider(), config.baseUrl())
+            ?: positiveError("Max steps per run", config.maxSteps())
+            ?: positiveError("Max \$ per run", config.maxRunCost())
+            ?: positiveError("Max \$ per task", config.maxTaskCost())
+            ?: positiveError("Check every", config.repeatInterval())
+            ?: validateSecrets(config)
 
     private fun validateSecrets(config: AgentConfiguration): String? {
         val slots = config.secretSlots()

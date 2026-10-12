@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import dev.kdriver.cdp.domain.Accessibility
 import dev.kdriver.cdp.domain.accessibility
+import dev.kdriver.cdp.domain.browser
 import dev.kdriver.cdp.domain.dom
 import dev.kdriver.cdp.domain.input
 import dev.kdriver.cdp.domain.runtime
@@ -14,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.files.Path
 import kotlinx.serialization.json.Json
@@ -234,9 +236,15 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     /** False once Chrome exited (crashed, quit by the user) or its last tab was closed: launch a new one. */
     val alive: Boolean get() = !browser.stopped && browser.mainTab != null
 
-    /** Stops Chrome. One that already died can't be asked to close (kdriver throws): nothing left to stop. */
+    /**
+     * Stops Chrome. It is first asked to quit and given time to exit, so it writes its cookies (sign-ins) to the
+     * profile: kdriver's stop kills it right after asking. One that already died can't be asked (kdriver throws).
+     */
     suspend fun close() {
         try {
+            val exit = browser.pid?.let { ProcessHandle.of(it).orElse(null)?.onExit() }
+            browser.connection?.browser?.close()
+            withContext(Dispatchers.IO) { runCatching { exit?.get(10, TimeUnit.SECONDS) } }
             browser.stop()
         } catch (e: CancellationException) {
             throw e

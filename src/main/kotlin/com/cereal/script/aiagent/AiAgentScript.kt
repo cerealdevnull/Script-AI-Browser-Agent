@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.UUID
 
 class AiAgentScript(
     private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
@@ -56,7 +57,7 @@ class AiAgentScript(
                     dead.close()
                 }
                 statusUpdate("Starting Chrome")
-                Browser.launch(profilesDir.resolve(profileName(configuration)), pageLoadTimeoutMs).also { this.browser = it }
+                Browser.launch(profilesDir.resolve(profileName(configuration, provider)), pageLoadTimeoutMs).also { this.browser = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -237,14 +238,16 @@ class AiAgentScript(
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
 
-    // ponytail: the SDK gives scripts no task id, so the profile is keyed by goal + start URL + secret slots (names
-    // and values, hashed: another account gets its own cookies). Two tasks with the same goal, URL and secrets share a
-    // profile (and can't run at the same time); key by task id if the SDK ever offers one.
-    private fun profileName(config: AgentConfiguration): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest("${config.goal()}\n${config.startUrl().trim()}\n${config.secrets().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }}".toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .take(16)
+    // Keyed by a task id the script stores in the task's own preferences (new task, new id: a deleted task's profile is
+    // never reused) plus a hash of the secrets (another account gets its own cookies). Rewording the goal keeps sign-ins.
+    // ponytail: profiles of deleted tasks stay on disk; remove the folder if Cereal ever offers a task-deletion hook.
+    private suspend fun profileName(config: AgentConfiguration, provider: ComponentProvider): String {
+        val prefs = provider.preference()
+        val taskId = prefs.getString(TASK_ID_KEY) ?: UUID.randomUUID().toString().also { prefs.setString(TASK_ID_KEY, it) }
+        val secrets = config.secrets().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }.toString()
+        val hash = MessageDigest.getInstance("SHA-256").digest(secrets.toByteArray()).joinToString("") { "%02x".format(it) }
+        return "$taskId-${hash.take(16)}"
+    }
 }
 
 private fun modelClient(config: AgentConfiguration): ModelClient {
@@ -256,6 +259,7 @@ private fun modelClient(config: AgentConfiguration): ModelClient {
     }
 }
 private const val MAX_TRANSIENT_FAILURES = 3
+private const val TASK_ID_KEY = "taskId"
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
 

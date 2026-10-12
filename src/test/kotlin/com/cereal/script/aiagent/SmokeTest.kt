@@ -12,7 +12,7 @@ import kotlin.test.Test
 
 /**
  * Manual smoke check (docs/acceptance.md): the real script on real sites, to find what breaks outside Toolshop.
- * Runs on gemini-3.5-flash-lite (cheap) through the OpenAI-compatible provider; skips without GEMINI_API_KEY.
+ * Runs on gemini-3.5-flash-lite (cheap) through the Custom provider (so the traffic proxy can sit in between); skips without GEMINI_API_KEY.
  * Not pass/fail: every site's log and model traffic land in build/smoke/<id>/ to be judged afterwards.
  * Read-only goals, and any confirmation is declined. Rerun a subset with SMOKE_ONLY=nike,ad.
  */
@@ -39,8 +39,8 @@ class SmokeTest {
             ModelTraffic(GEMINI).use { traffic ->
                 val config =
                     TestConfig(
-                        goal = site.goal, startUrl = site.url, provider = Provider.OpenAICompatible, apiKey = Secret(key),
-                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, reLearn = true,
+                        goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
+                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, onNextStart = OnNextStart.ForgetSteps,
                     )
                 val script = AiAgentScript(profilesDir = tempProfiles())
                 val provider = host.create()

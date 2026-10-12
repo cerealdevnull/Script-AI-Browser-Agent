@@ -18,9 +18,9 @@ import kotlinx.serialization.json.putJsonObject
  * The API key is optional (local servers) and goes only to [baseUrl], in the auth header.
  */
 class OpenAiCompatibleClient(
-    private val baseUrl: String,
+    internal val baseUrl: String,
     private val apiKey: String?,
-    private val model: String,
+    internal val model: String,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {

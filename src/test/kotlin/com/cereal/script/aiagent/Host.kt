@@ -100,7 +100,7 @@ class TestConfig(
     val maxRunCost: Double = 3.0,
     val maxTaskCost: Double = 10.0,
     val provider: Provider = Provider.Anthropic,
-    val model: String = "claude-opus-5-5",
+    val model: String? = "claude-opus-5-5",
     /** Secret slots 1..3 as (name, value). */
     val secrets: List<Pair<String?, Secret?>> = emptyList(),
     val allowedDomains: List<String> = emptyList(),

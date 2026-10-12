@@ -215,8 +215,9 @@ class AiAgentScript(
             config.goal().isBlank() -> "Goal is required"
             config.startUrl().isBlank() -> "Start URL is required"
             scheme != "http" && scheme != "https" -> "Start URL must be an http(s) URL"
-            config.provider() == Provider.Anthropic && config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for Anthropic"
-            config.model().isBlank() -> "Model is required"
+            config.provider() != Provider.Custom && config.apiKey()?.reveal().isNullOrBlank() -> "API key is required for ${config.provider()}"
+            config.provider() == Provider.Custom && config.model().isNullOrBlank() -> "Model is required for Custom"
+            config.provider() == Provider.Custom && config.baseUrl().isNullOrBlank() -> "Server URL is required for Custom"
             config.maxSteps() <= 0 -> "Max steps per run must be > 0"
             config.maxRunCost() <= 0 -> "Max \$ per run must be > 0"
             config.maxTaskCost() <= 0 -> "Max \$ per task must be > 0"
@@ -247,12 +248,14 @@ class AiAgentScript(
             .take(16)
 }
 
-private fun modelClient(config: AgentConfiguration): ModelClient {
-    val baseUrl = config.baseUrl()?.trim()?.takeIf(String::isNotEmpty)
-    val model = config.model().trim()
-    return when (config.provider()) {
-        Provider.Anthropic -> AnthropicClient(baseUrl ?: AnthropicClient.DEFAULT_BASE_URL, config.apiKey()!!.reveal(), model)
-        Provider.OpenAICompatible -> OpenAiCompatibleClient(baseUrl ?: OpenAiCompatibleClient.DEFAULT_BASE_URL, config.apiKey()?.reveal(), model)
+/** A preset's own server (a leftover Server URL is ignored: the key must not go elsewhere); Custom's Server URL. */
+internal fun modelClient(config: AgentConfiguration): ModelClient {
+    val provider = config.provider()
+    val baseUrl = provider.baseUrl ?: config.baseUrl()!!.trim()
+    val model = config.model()?.trim()?.ifEmpty { null } ?: provider.recommendedModel!!
+    return when (provider) {
+        Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), model)
+        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), model)
     }
 }
 private const val MAX_TRANSIENT_FAILURES = 3

@@ -4,7 +4,7 @@ Opt-in runs that prove the three goals end to end with a real `claude-opus-5-5` 
 (`practicesoftwaretesting.com`). They are tagged `acceptance`: `./gradlew test` never runs them. Each one
 **costs real money** and skips itself when `ANTHROPIC_API_KEY` is not set.
 
-Every run drives the real script (real Chrome, real Anthropic adapter). The script's Base URL points at a local
+Every run drives the real script (real Chrome, real Anthropic adapter). The test points that adapter at a local
 pass-through that forwards to `api.anthropic.com` and keeps every request and response. The tests use it to check
 that the password never left the machine, that `fallbacks: "default"` was accepted, and that later steps read from the
 prompt cache. Each goal run prints a table row (`ACCEPTANCE | …`) and appends it to `build/acceptance/results.md`.

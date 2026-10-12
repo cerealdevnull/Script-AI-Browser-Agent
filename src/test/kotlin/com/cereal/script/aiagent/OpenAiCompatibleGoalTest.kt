@@ -39,7 +39,7 @@ class OpenAiCompatibleGoalTest {
         )
         api.start()
         val config =
-            TestConfig(provider = Provider.OpenAICompatible, baseUrl = api.url("/v1").toString(), apiKey = null, model = "llama3", startUrl = site.url())
+            TestConfig(provider = Provider.Custom, baseUrl = api.url("/v1").toString(), apiKey = null, model = "llama3", startUrl = site.url())
 
         val result = runBlocking { host.run(AiAgentScript(profilesDir = tempProfiles()), config) }
 

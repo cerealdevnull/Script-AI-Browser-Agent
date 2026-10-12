@@ -70,7 +70,7 @@ class ConfirmationTest {
 
         val result = run(model, "checkout.html")
 
-        assertEquals("Success: Goal met", result.text)
+        assertEquals("Success: Ordered.", result.text)
         assertEquals(1, host.dialogs.size)
         assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") })
     }
@@ -97,7 +97,7 @@ class ConfirmationTest {
 
         val result = run(model, "login.html")
 
-        assertEquals("Success: Goal met", result.text)
+        assertEquals("Success: Logged in.", result.text)
         assertEquals(0, host.dialogs.size)
         assertTrue(host.logs.any { "model flag cleared: sign-in submit" in it }, host.logs.joinToString("\n"))
     }
@@ -126,7 +126,7 @@ class ConfirmationTest {
                 { listOf(call("finish", """{"goal_met": true, "summary": "Logged in."}""")) },
             )
 
-        assertEquals("Success: Goal met", run(model, "login.html").text)
+        assertEquals("Success: Logged in.", run(model, "login.html").text)
         assertEquals(1, host.dialogs.size)
     }
 

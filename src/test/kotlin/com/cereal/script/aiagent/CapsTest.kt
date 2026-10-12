@@ -102,6 +102,6 @@ class CapsTest {
 
         run(model)
 
-        assertEquals("Goal met\nIn stock.\nCost: \$0", host.notifications.single().message)
+        assertEquals("In stock.\nCost: \$0", host.notifications.single().message)
     }
 }

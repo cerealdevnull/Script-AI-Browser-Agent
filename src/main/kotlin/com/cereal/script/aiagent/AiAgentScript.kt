@@ -143,10 +143,13 @@ class AiAgentScript(
             is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
-                val summary = if (repeat || outcome.summary.isEmpty()) emptyList() else listOf(scrubber.forLog(outcome.summary).take(300))
-                report.notify(verdict, details = readouts + summary, cost = cost())
+                // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
+                // ponytail: splits at the first ". " so "e.g. " cuts early; ask the model for a separate answer field if that bites.
+                val summary = if (repeat) "" else scrubber.forLog(outcome.summary).take(300).trim()
+                val headline = summary.split(Regex("(?<=[.!?])\\s+"), limit = 2)
+                report.notify(headline[0].ifEmpty { verdict }, details = headline.drop(1) + readouts, cost = cost())
                 // A Once run that answers "not met" still completed its job.
-                ExecutionResult.Success(verdict)
+                ExecutionResult.Success(headline[0].ifEmpty { verdict })
             }
         }
     }

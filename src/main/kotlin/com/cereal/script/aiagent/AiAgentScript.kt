@@ -38,6 +38,9 @@ class AiAgentScript(
     // Repeat: consecutive iterations that failed transiently (page load, network, model 429/5xx after retries).
     private var transientFailures = 0
 
+    // Repeat: the 80% Max $ per task warning was sent this task start.
+    private var capWarned = false
+
     // The pre-flight key and model check passed this task start.
     private var checked = false
 
@@ -58,6 +61,7 @@ class AiAgentScript(
         scrubber = null
         transientFailures = 0
         checked = false
+        capWarned = false
         priceAnnounced = false
         firstRun = true
         reset = if (configError == null) onNextStart(configuration, provider) else null
@@ -191,6 +195,12 @@ class AiAgentScript(
                 null
             }
         statusUpdate(notYet ?: verdict)
+        // Once, when the task total first passes 80% of the task cap (a run stopped by the cap says so itself).
+        val maxTask = configuration.maxTaskCost()
+        if (repeat && !capWarned && taskSpent >= 0.8 * maxTask && taskSpent < maxTask) {
+            capWarned = true
+            notify(configuration, provider, "This monitor has spent ${usd(taskSpent)} of its ${usd(maxTask)} limit.\nRaise Max \$ per task to keep it running past ${usd(maxTask)}.")
+        }
         log.info(
             "run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict" +
                 if (repeat) ", check $checks" else "",

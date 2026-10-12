@@ -183,7 +183,7 @@ class AiAgentScript(
         scrubber: Scrubber,
         step: Confirmation,
     ): Boolean {
-        notify(config, provider, scrubber.forLog("Confirmation needed: ${step.question}"))
+        notify(config, provider, scrubber.forLog("${step.question}\nConfirmation needed: answer in the window that opened. The task waits until you answer."))
         fun esc(s: String) = escapeHtml(scrubber.forLog(s))
         val does = step.text?.let { "It will send: “${esc(it.trim())}”" } ?: "It will press “${esc(step.label)}”."
         val why = step.reason?.let(::esc) ?: "The agent gave no reason. It flagged this step because the button says “${esc(step.label)}”."

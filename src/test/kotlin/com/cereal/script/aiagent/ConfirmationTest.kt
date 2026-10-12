@@ -51,7 +51,7 @@ class ConfirmationTest {
         assertEquals(1, host.dialogs.size)
         assertEquals(1, model.requests.size)
         assertFalse("/order.html" in site.requested, "the order was submitted")
-        assertEquals("Confirmation needed: Place this order on 127.0.0.1?", host.notifications.first().message)
+        assertEquals("Place this order on 127.0.0.1?\nConfirmation needed: answer in the window that opened. The task waits until you answer.", host.notifications.first().message)
         assertTrue(host.notifications.last().message.startsWith("Declined by user\n"), host.notifications.last().message)
     }
 
@@ -72,7 +72,7 @@ class ConfirmationTest {
 
         assertEquals("Success: Goal met", result.text)
         assertEquals(1, host.dialogs.size)
-        assertTrue(host.notifications.any { it.message.startsWith("Confirmation needed: ") })
+        assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") })
     }
 
     @Test

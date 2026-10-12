@@ -268,7 +268,7 @@ class G3BuyTest {
         }
 
         assertEquals(before, count(), "an invoice was created after Decline")
-        assertTrue(host.notifications.any { it.message.startsWith("Confirmation needed: ") }, host.notifications.map { it.message }.toString())
+        assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") }, host.notifications.map { it.message }.toString())
         assertTrue(host.notifications.last().message.startsWith("Declined by user"), host.notifications.last().message)
         traffic.assertNeverContains(Demo.password, "the password")
         traffic.assertFallbacksAccepted()

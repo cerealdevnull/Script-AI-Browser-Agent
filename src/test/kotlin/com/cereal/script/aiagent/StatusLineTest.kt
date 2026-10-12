@@ -102,16 +102,16 @@ class StatusLineTest {
                 "Replaying 1 of 2 · \$0 · Clicking \"Tools\"",
                 "Replaying 2 of 2 · \$0 · Clicking \"Long Nose Pliers\"",
                 "Replay: checking the result",
-                "Goal not met",
+                "Not yet · checked hh:mm · next hh:mm · \$0.02 of \$10 total",
                 "Opening 127.0.0.1",
                 "Replaying 1 of 2 · \$0 · Clicking \"Tools\"",
                 "The saved steps stopped matching at step 2. The agent takes over.",
                 "Recovering · Step 1 of 40 · \$0.00 · Thinking…",
                 "Recovering · Step 1 of 40 · \$0.01 · Clicking \"Pliers, long nose\"",
                 "Recovering · Step 2 of 40 · \$0.01 · Thinking…",
-                "Goal not met",
+                "Not yet · checked hh:mm · next hh:mm · \$0.03 of \$10 total",
             ),
-            statuses,
+            statuses.map { it.replace(Regex("\\d\\d:\\d\\d"), "hh:mm") },
         )
         assertTrue(statuses.none { "heal" in it.lowercase() || "miss" in it.lowercase() })
     }

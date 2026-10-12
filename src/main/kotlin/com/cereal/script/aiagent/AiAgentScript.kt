@@ -13,18 +13,25 @@ import kotlinx.coroutines.withContext
 import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.time.Clock
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 class AiAgentScript(
     private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
     private val pageLoadTimeoutMs: Long = 60_000,
+    private val clock: Clock = Clock.systemDefaultZone(),
 ) : Script<AgentConfiguration> {
     private var configError: String? = null
     private var browser: Browser? = null
 
     // The task cap counts every run of this task; held in memory only, so it resets when the task restarts.
     private var taskSpent = 0.0
+
+    // Repeat: runs (checks) since the task started, in memory like taskSpent.
+    private var checks = 0
 
     // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
     private var scrubber: Scrubber? = null
@@ -45,6 +52,7 @@ class AiAgentScript(
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
+        checks = 0
         scrubber = null
         transientFailures = 0
         checked = false
@@ -157,6 +165,7 @@ class AiAgentScript(
                 return report.error("Something went wrong inside the script.", "Start the task again. If it happens again, send the task log to the developer.", cost())
             } finally {
                 taskSpent += agent.cost
+                checks++
             }
         // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
         // ponytail: splits at the first ". " so "e.g. " cuts early; ask the model for a separate answer field if that bites.
@@ -171,8 +180,18 @@ class AiAgentScript(
                     is Outcome.Declined -> outcome.step.declined
                 },
             )
-        statusUpdate(verdict)
-        log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
+        // Between checks the task row tells when it checked and when it checks next; the times keep each line unique.
+        val notYet =
+            if (repeat && outcome is Outcome.Finished && !outcome.goalMet) {
+                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${usd(taskSpent).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
+            } else {
+                null
+            }
+        statusUpdate(notYet ?: verdict)
+        log.info(
+            "run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict" +
+                if (repeat) ", check $checks" else "",
+        )
         // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
         // A heal is a failed heal (no new message); a learned run asks for a reworded goal.
         if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed)) {
@@ -185,7 +204,7 @@ class AiAgentScript(
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && !badStartUrl && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
-            return ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
+            return retry(configuration, scrubber.forLog((outcome as Outcome.Failed).unreachable!!), statusUpdate)
         }
         return when (outcome) {
             is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
@@ -199,7 +218,7 @@ class AiAgentScript(
             // A No is a normal finish, not an Error; it ends a monitor too.
             is Outcome.Declined -> report.notify(verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
             // A monitor stays quiet until the goal is met.
-            is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
+            is Outcome.Finished if repeat && !outcome.goalMet -> ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
                 report.notify(verdict, details = answer.drop(1) + readouts, cost = cost())
@@ -208,6 +227,15 @@ class AiAgentScript(
             }
         }
     }
+
+    /** A temporary failure 1-2 of 3 shows only on the task row: `Couldn't reach <host> (1 of 3) · retrying 14:47`. */
+    private suspend fun retry(config: AgentConfiguration, host: String, statusUpdate: suspend (String) -> Unit): ExecutionResult {
+        val line = "Couldn't reach $host ($transientFailures of $MAX_TRANSIENT_FAILURES) · retrying ${hhmm(config.repeatInterval())}"
+        statusUpdate(line)
+        return ExecutionResult.Loop(line, config.repeatInterval() * 1000L)
+    }
+
+    private fun hhmm(inSeconds: Int) = LocalTime.now(clock).plusSeconds(inSeconds.toLong()).format(DateTimeFormatter.ofPattern("HH:mm"))
 
     // The host calls this from `finally`, also when the task is cancelled: stop Chrome even in a cancelled coroutine.
     override suspend fun onFinish(configuration: AgentConfiguration, provider: ComponentProvider) {
@@ -242,10 +270,7 @@ class AiAgentScript(
             } catch (e: ModelException) {
                 warn("pre-flight check failed: ${e.message}")
                 val headline = "Couldn't reach $who (${e.status?.let { "HTTP $it" } ?: "network error"}). Try again later."
-                if (config.runMode() == RunMode.Repeat && ++transientFailures < MAX_TRANSIENT_FAILURES) {
-                    statusUpdate(headline)
-                    return ExecutionResult.Loop(headline, config.repeatInterval() * 1000L)
-                }
+                if (config.runMode() == RunMode.Repeat && ++transientFailures < MAX_TRANSIENT_FAILURES) return retry(config, who, statusUpdate)
                 headline
             }
         return problem?.let { report.error(it, cost = COST_ZERO) }

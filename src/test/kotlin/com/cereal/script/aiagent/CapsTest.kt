@@ -85,14 +85,14 @@ class CapsTest {
     }
 
     @Test
-    fun `an unknown model costs nothing, logs a warning and is stopped by the step cap`() {
+    fun `an unknown model costs unknown, logs a warning and is stopped by the step cap`() {
         val model = ScriptedModel(readForever, readForever, readForever, models = List(3) { "llama3.3:70b" })
 
         val result = run(model, maxSteps = 2, maxRunCost = 0.001)
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Stopped after 2 steps, the Max steps per run limit.", result.message)
-        assertTrue(host.notifications.single().message.endsWith("\nCost: \$0"))
+        assertTrue(host.notifications.single().message.endsWith("\nCost: unknown (no price for llama3.3:70b)"))
         assertEquals(1, host.logs.count { it == "WARN no price known for model llama3.3:70b: counted as \$0, only the step cap applies" })
     }
 
@@ -122,5 +122,33 @@ class CapsTest {
         run(model)
 
         assertEquals("In stock.\nCost: \$0", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a local model with no price shows the cost as unknown, never $0`() {
+        val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf("llama3.3:70b"))
+        val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
+
+        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+
+        assertEquals("Step 1 of 40 · \$? · Thinking…", host.statuses.first { it.startsWith("Step 1") })
+        assertEquals("In stock.\nCost: unknown (no price for llama3.3:70b)", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a run where some steps had no price shows the priced part plus unknown`() {
+        val model =
+            ScriptedModel(
+                readForever,
+                readForever,
+                { listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) },
+                usage = Usage(30_000, 0),
+                models = listOf("claude-opus-5-5", "llama3.3:70b", "llama3.3:70b"),
+            )
+
+        run(model)
+
+        assertEquals("Step 3 of 40 · \$0.12 + unknown · Thinking…", host.statuses.first { it.startsWith("Step 3") })
+        assertEquals("In stock.\nCost: \$0.12 + unknown", host.notifications.single().message)
     }
 }

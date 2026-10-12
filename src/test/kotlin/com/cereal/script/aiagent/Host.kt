@@ -6,6 +6,7 @@ import com.cereal.sdk.component.ComponentProvider
 import com.cereal.sdk.component.logger.LoggerComponent
 import com.cereal.sdk.component.notification.Notification
 import com.cereal.sdk.component.notification.NotificationComponent
+import com.cereal.sdk.component.preference.PreferenceComponent
 import com.cereal.sdk.models.Secret
 import com.cereal.test.ComponentProviderFactory
 import com.cereal.test.TestScriptRunner
@@ -13,7 +14,6 @@ import com.cereal.test.components.RecordingArtifactComponent
 import com.cereal.test.components.TestComponentProvider
 import com.cereal.test.components.TestComponentProviderFactory
 import com.cereal.test.components.TestLicenseComponent
-import com.cereal.test.components.TestPreferenceComponent
 import com.cereal.test.components.TestScriptLauncherComponent
 import com.cereal.sdk.component.userinteraction.UserInteractionComponent
 import com.cereal.sdk.component.userinteraction.WebResourceRequest
@@ -45,7 +45,7 @@ class Host : ComponentProviderFactory {
                 }
             },
             TestLicenseComponent(),
-            TestPreferenceComponent(),
+            TaskPreferences(),
             TestScriptLauncherComponent(TestComponentProviderFactory(), null),
             object : UserInteractionComponent {
                 override suspend fun showHtml(title: String, html: String, shouldFinish: (WebResourceRequest) -> Boolean): WebResourceRequest {
@@ -78,6 +78,26 @@ class Host : ComponentProviderFactory {
         TestScriptRunner(recording).run(config, this)
         return recording.last
     }
+}
+
+/** One task's preferences. TestPreferenceComponent shares one static map across every instance, i.e. across tasks. */
+class TaskPreferences : PreferenceComponent {
+    private val values = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+    override suspend fun delete(key: String) {
+        values.remove(key)
+    }
+
+    override suspend fun getString(key: String) = values[key] as? String
+    override suspend fun setString(key: String, value: String) { values[key] = value }
+    override suspend fun getInt(key: String) = values[key] as? Int
+    override suspend fun setInt(key: String, value: Int) { values[key] = value }
+    override suspend fun getLong(key: String) = values[key] as? Long
+    override suspend fun setLong(key: String, value: Long) { values[key] = value }
+    override suspend fun getFloat(key: String) = values[key] as? Float
+    override suspend fun setFloat(key: String, value: Float) { values[key] = value }
+    override suspend fun getBoolean(key: String) = values[key] as? Boolean
+    override suspend fun setBoolean(key: String, value: Boolean) { values[key] = value }
 }
 
 /** Remembers the last result of execute(), which [TestScriptRunner] doesn't expose. */

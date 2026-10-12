@@ -20,6 +20,11 @@ class PricesTest {
     }
 
     @Test
+    fun `matches OpenRouter's dotted Claude ids`() {
+        assertEquals(10.0, Prices.cost("anthropic/claude-sonnet-5.5", Usage(0, 1_000_000))!!, 1e-9)
+    }
+
+    @Test
     fun `unknown model has no price`() {
         assertNull(Prices.cost("llama3.3:70b", Usage(1000, 100)))
         assertNull(Prices.cost(null, Usage(1000, 100)))

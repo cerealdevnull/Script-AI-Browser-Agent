@@ -197,4 +197,56 @@ class OpenAiCompatibleClientTest {
             assertEquals("refusal", turn.stopReason)
             assertEquals("I can't help with that.", turn.text)
         }
+
+    // OpenRouter passes Anthropic's cache_control through; breakpoints on the system prompt and the newest message.
+    @Test
+    fun `a Claude model marks the system prompt and the newest message for caching`() =
+        runBlocking {
+            enqueue()
+
+            OpenAiCompatibleClient(baseUrl, "sk-or", "anthropic/claude-sonnet-5.5")
+                .send(request(Message.User("Goal: x"), Message.ToolResults(listOf(ToolResult("call_1", "ok")))))
+
+            val sent = Json.parseToJsonElement(api.takeRequest().body!!.utf8()).jsonObject["messages"]!!
+            assertEquals(
+                Json.parseToJsonElement(
+                    """
+                    [{"role":"system","content":[{"type":"text","text":"system prompt","cache_control":{"type":"ephemeral"}}]},
+                     {"role":"user","content":"Goal: x"},
+                     {"role":"tool","tool_call_id":"call_1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]
+                    """,
+                ),
+                sent,
+            )
+        }
+
+    // Trimming rewrites an old message each step, which breaks the cached prefix; the Anthropic preset keeps them too.
+    @Test
+    fun `a Claude model keeps every snapshot whole`() =
+        runBlocking {
+            enqueue()
+            val results = (0..2).map { Message.ToolResults(listOf(ToolResult("call_$it", "ok\n<page_content>\nsnapshot $it</page_content>"))) }
+
+            OpenAiCompatibleClient(baseUrl, "sk-or", "anthropic/claude-sonnet-5.5").send(request(Message.User("Goal: x"), *results.toTypedArray()))
+
+            assertFalse("older snapshot removed" in api.takeRequest().body!!.utf8())
+        }
+
+    @Test
+    fun `OpenRouter cache writes are counted apart from uncached input`() =
+        runBlocking {
+            api.enqueue(
+                MockResponse.Builder().body(
+                    """
+                    {"model":"anthropic/claude-sonnet-5.5","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"done"}}],
+                     "usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,
+                              "prompt_tokens_details":{"cached_tokens":600,"cache_write_tokens":300}}}
+                    """.trimIndent(),
+                ).build(),
+            )
+
+            val usage = OpenAiCompatibleClient(baseUrl, "sk-or", "anthropic/claude-sonnet-5.5").send(request(Message.User("Goal: x"))).usage
+
+            assertEquals(listOf(100L, 10L, 600L, 300L), listOf(usage.input, usage.output, usage.cacheRead, usage.cacheWrite))
+        }
 }

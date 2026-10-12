@@ -55,10 +55,11 @@ object Prices {
 
     /**
      * Dollars for one call by [model] (the response's model id), or null when the table doesn't know it. Accepts a
-     * `provider/` prefix (OpenRouter) and a `-<snapshot>` suffix (`gpt-4o-2024-08-06`); the longest matching id wins.
+     * `provider/` prefix and dotted Claude versions (OpenRouter) and a `-<snapshot>` suffix (`gpt-4o-2024-08-06`); the longest matching id wins.
      */
     fun cost(model: String?, usage: Usage): Double? {
-        val id = model?.substringAfterLast('/') ?: return null
+        // OpenRouter writes Claude versions with dots (claude-sonnet-5.5).
+        val id = model?.substringAfterLast('/')?.let { if (it.startsWith("claude-")) it.replace('.', '-') else it } ?: return null
         val price = table.entries.filter { id == it.key || id.startsWith(it.key + "-") }.maxByOrNull { it.key.length }?.value ?: return null
         return (usage.input * price.input + usage.output * price.output + usage.cacheRead * price.cacheRead + usage.cacheWrite * price.cacheWrite) / 1e6
     }

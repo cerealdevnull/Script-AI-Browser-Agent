@@ -74,13 +74,14 @@ class RepeatTest {
         }
 
     /** Learns: open the product, then finish "not met" with a Check on the stock text. */
-    private fun learning() =
+    private fun learning(usage: Usage = Usage(1000, 100)) =
         ScriptedModel(
             {
                 assertTrue("Run mode: Repeat" in it.lastText, it.lastText)
                 listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}"""))
             },
             { listOf(call("finish", notMet(it))) },
+            usage = usage,
         )
 
     private fun notMet(request: ModelRequest) =
@@ -108,6 +109,20 @@ class RepeatTest {
             assertEquals(2, model.requests.size)
             assertEquals("Goal met\nCost: \$0", host.notifications.single().message)
         }
+    }
+
+    @Test
+    fun `a monitor warns once when the task total passes 80 percent of Max per task`() {
+        stock("Out of stock")
+
+        // Learning costs $0.42 of $0.50; the replays after it cost nothing and stay quiet.
+        task(learning(Usage(35_000, 3_500)), config(maxTaskCost = 0.5)) { execute ->
+            repeat(3) { assertIs<ExecutionResult.Loop>(execute()) }
+        }
+        assertEquals(
+            "This monitor has spent \$0.42 of its \$0.50 limit.\nRaise Max \$ per task to keep it running past \$0.50.",
+            host.notifications.single().message,
+        )
     }
 
     /** A clock the test moves by hand, in UTC. */

@@ -71,6 +71,14 @@ class AnthropicClient(
         )
     }
 
+    override suspend fun check(): Preflight? =
+        try {
+            getJson("${baseUrl.trimEnd('/')}/v1/models/$model", mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01"), sleep)
+            null
+        } catch (e: ModelException) {
+            preflight(e)
+        }
+
     private fun toJson(message: Message): JsonObject =
         when (message) {
             is Message.User ->

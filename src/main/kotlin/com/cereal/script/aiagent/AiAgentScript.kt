@@ -31,12 +31,16 @@ class AiAgentScript(
     // Repeat: consecutive iterations that failed transiently (page load, network, model 429/5xx after retries).
     private var transientFailures = 0
 
+    // The pre-flight key and model check passed this task start.
+    private var checked = false
+
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
         scrubber = null
         transientFailures = 0
+        checked = false
         if (configError == null && configuration.reLearn()) provider.preference().delete(cacheKey(configuration))
         return true
     }
@@ -50,6 +54,8 @@ class AiAgentScript(
         configError?.let { return report.error(it, cost = COST_ZERO) }
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
+        val model = newModelClient(configuration)
+        if (!checked) preflight(configuration, model, report, statusUpdate) { log.warn(scrubber.forLog(it)) }?.let { return it }
         val browser =
             browser?.takeIf { it.alive } ?: try {
                 this.browser?.let { dead ->
@@ -69,7 +75,17 @@ class AiAgentScript(
         val agent =
             Agent(
                 browser,
-                newModelClient(configuration),
+                // A key revoked mid-run gets the pre-flight's wording.
+                object : ModelClient {
+                    override suspend fun send(request: ModelRequest) =
+                        try {
+                            model.send(request)
+                        } catch (e: ModelException) {
+                            if (e.status != 401 && e.status != 403) throw e
+                            log.error(scrubber.forLog(e.message.orEmpty()))
+                            throw ModelException(keyRejected(configuration))
+                        }
+                },
                 configuration.goal(),
                 configuration.startUrl().trim(),
                 caps,
@@ -158,6 +174,41 @@ class AiAgentScript(
         val browser = browser ?: return
         this.browser = null
         withContext(NonCancellable) { browser.close() }
+    }
+
+    /**
+     * Once per task start, before Chrome: a free lookup of the key and model. Returns the result that ends this run, or
+     * null to go on. A transient failure fails a Once run; Repeat retries it under the three-in-a-row rule.
+     */
+    private suspend fun preflight(
+        config: AgentConfiguration,
+        model: ModelClient,
+        report: Report,
+        statusUpdate: suspend (String) -> Unit,
+        warn: (String) -> Unit,
+    ): ExecutionResult? {
+        statusUpdate("Checking your API key and model")
+        val who = who(config)
+        val id = config.modelId()
+        val clear = if (config.provider() == Provider.Custom) "Pick another Model" else "Clear Model to use the recommended one"
+        val problem =
+            try {
+                when (model.check()) {
+                    Preflight.BadKey -> keyRejected(config)
+                    Preflight.UnknownModel -> "${who.replaceFirstChar(Char::uppercase)} has no model called `$id`. $clear, or check the spelling."
+                    Preflight.NoTools -> "`$id` can't control the browser here. $clear."
+                    null -> null.also { checked = true }
+                }
+            } catch (e: ModelException) {
+                warn("pre-flight check failed: ${e.message}")
+                val headline = "Couldn't reach $who (${e.status?.let { "HTTP $it" } ?: "network error"}). Try again later."
+                if (config.runMode() == RunMode.Repeat && ++transientFailures < MAX_TRANSIENT_FAILURES) {
+                    statusUpdate(headline)
+                    return ExecutionResult.Loop(headline, config.repeatInterval() * 1000L)
+                }
+                headline
+            }
+        return problem?.let { report.error(it, cost = COST_ZERO) }
     }
 
     /**
@@ -275,11 +326,19 @@ class AiAgentScript(
 internal fun modelClient(config: AgentConfiguration): ModelClient {
     val provider = config.provider()
     val baseUrl = provider.baseUrl ?: config.baseUrl()!!.trim()
-    val model = config.model()?.trim()?.ifEmpty { null } ?: provider.recommendedModel!!
     return when (provider) {
-        Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), model)
-        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), model)
+        Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), config.modelId())
+        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), config.modelId())
     }
+}
+
+private fun AgentConfiguration.modelId() = model()?.trim()?.ifEmpty { null } ?: provider().recommendedModel!!
+
+private fun who(config: AgentConfiguration) = if (config.provider() == Provider.Custom) "your server" else config.provider().name
+
+private fun keyRejected(config: AgentConfiguration): String {
+    val from = config.provider().keyUrl?.let { "from $it " }.orEmpty()
+    return "${who(config).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
 }
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val TASK_ID_KEY = "taskId"

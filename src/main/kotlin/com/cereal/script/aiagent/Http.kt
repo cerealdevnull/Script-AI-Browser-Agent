@@ -34,8 +34,13 @@ internal suspend fun postJson(
     headers: Map<String, String>,
     body: JsonObject,
     sleep: suspend (Long) -> Unit,
-): JsonObject {
-    val request = Request.Builder().url(url).apply { headers.forEach(::header) }.post(body.toString().toRequestBody(JSON_TYPE)).build()
+): JsonObject = send(Request.Builder().url(url).apply { headers.forEach(::header) }.post(body.toString().toRequestBody(JSON_TYPE)).build(), sleep)
+
+/** GETs [url] with the same retries and errors as [postJson]. */
+internal suspend fun getJson(url: String, headers: Map<String, String>, sleep: suspend (Long) -> Unit): JsonObject =
+    send(Request.Builder().url(url).apply { headers.forEach(::header) }.build(), sleep)
+
+private suspend fun send(request: Request, sleep: suspend (Long) -> Unit): JsonObject {
     var attempt = 0
     while (true) {
         val reply =
@@ -54,14 +59,23 @@ internal suspend fun postJson(
         val transient = code == 429 || code >= 500
         if (!transient) {
             val rejected = code in setOf(401, 403, 404) || (code == 400 && "model" in message.lowercase())
-            throw ModelException(if (rejected) "Model/API key rejected: $message" else "Model error: $message")
+            throw ModelException(if (rejected) "Model/API key rejected: $message" else "Model error: $message", status = code)
         }
-        if (attempt == MAX_RETRIES) throw ModelException("Model error: $message", transient = true)
+        if (attempt == MAX_RETRIES) throw ModelException("Model error: $message", transient = true, status = code)
         val asked = if (code == 429) retryAfter?.toDoubleOrNull() ?: error?.let(::geminiRetryDelay) else null
         sleep(asked?.let { (it * 1000).toLong() } ?: backoff(attempt))
         attempt++
     }
 }
+
+/** A failed pre-flight lookup: 401/403 a bad key, 404 an unknown model; a transient failure is rethrown, any other passes. */
+internal fun preflight(e: ModelException): Preflight? =
+    when {
+        e.transient -> throw e
+        e.status == 401 || e.status == 403 -> Preflight.BadKey
+        e.status == 404 -> Preflight.UnknownModel
+        else -> null
+    }
 
 private const val MAX_RETRIES = 3
 

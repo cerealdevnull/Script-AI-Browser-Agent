@@ -6,7 +6,15 @@ import kotlinx.serialization.json.JsonObject
 /** The script's own, provider-neutral view of a chat model with tools. Adapters map it to one provider's API. */
 interface ModelClient {
     suspend fun send(request: ModelRequest): ModelTurn
+
+    /**
+     * A free lookup of the model before Chrome starts: null when it looks fine or the server can't tell. A transient
+     * failure (network, 429, 5xx) throws a transient [ModelException].
+     */
+    suspend fun check(): Preflight? = null
 }
+
+enum class Preflight { BadKey, UnknownModel, NoTools }
 
 /** [onRetry]: called with the wait in ms before each retry of a busy (429/5xx) or unreachable provider. */
 class ModelRequest(val system: String, val tools: List<ToolDef>, val messages: List<Message>, val onRetry: suspend (Long) -> Unit = {})
@@ -44,6 +52,7 @@ class Usage(val input: Long, val output: Long, val cacheRead: Long = 0, val cach
 
 /**
  * A model API or network failure; [message] is the user-facing reason. [transient]: a 429, 5xx or network error that
- * outlasted its retries, so a later attempt may work. Non-transient: rejected key/model or another 4xx.
+ * outlasted its retries, so a later attempt may work. Non-transient: rejected key/model or another 4xx. [status]: the
+ * HTTP status, null for a network error.
  */
-class ModelException(message: String, val transient: Boolean = false) : Exception(message)
+class ModelException(message: String, val transient: Boolean = false, val status: Int? = null) : Exception(message)

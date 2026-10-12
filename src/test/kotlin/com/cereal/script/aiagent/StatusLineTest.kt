@@ -26,6 +26,7 @@ class StatusLineTest {
 
         assertEquals(
             listOf(
+                "Checking your API key and model",
                 "Starting Chrome",
                 "Opening 127.0.0.1",
                 "Step 1 of 40 · \$0.00 · Thinking…",

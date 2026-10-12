@@ -46,7 +46,7 @@ class OpenAiCompatibleGoalTest {
         assertIs<ExecutionResult.Success>(result)
         assertEquals("Goal met\nLong Nose Pliers is in stock.\nCost: $0", host.notifications.single().message)
         val requests = List(api.requestCount) { api.takeRequest() }
-        assertEquals(listOf("/v1/chat/completions", "/v1/chat/completions"), requests.map { it.url.encodedPath })
+        assertEquals(listOf("/v1/models", "/v1/chat/completions", "/v1/chat/completions"), requests.map { it.url.encodedPath })
         requests.forEach { assertNull(it.headers["Authorization"]) }
     }
 
@@ -56,6 +56,8 @@ class OpenAiCompatibleGoalTest {
             private var n = 0
 
             override fun dispatch(request: RecordedRequest): MockResponse {
+                // No models endpoint, like some local servers: the pre-flight check is skipped.
+                if (request.method == "GET") return MockResponse.Builder().code(404).build()
                 val last = Json.parseToJsonElement(request.body!!.utf8()).jsonObject["messages"]!!.jsonArray.last().jsonObject
                 val (name, args) = turns[n++](last["content"]!!.jsonPrimitive.content)
                 val message =

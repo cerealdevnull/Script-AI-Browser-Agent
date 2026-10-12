@@ -129,6 +129,11 @@ class AiAgentScript(
             )
         statusUpdate(verdict)
         log.info("run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict")
+        // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
+        // A heal is a failed heal (no new message); a learned run asks for a reworded goal.
+        if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed)) {
+            return report.error(NOTHING_TO_WATCH, REWORD.takeUnless { agent.healed }, cost = cost())
+        }
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
@@ -280,6 +285,8 @@ internal fun modelClient(config: AgentConfiguration): ModelClient {
     }
 }
 private const val MAX_TRANSIENT_FAILURES = 3
+private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
+private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
 private const val TASK_ID_KEY = "taskId"
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"

@@ -18,3 +18,5 @@
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
 - **run cap** / **task cap**: the step and dollar limits per goal run / per task.
+- **current tab**: the tab the agent sees and acts in; it moves to a tab the agent's own action opened and back to the opener when that tab closes.
+- **frame**: a same-origin iframe whose content is part of the snapshot; a cross-origin iframe shows only as a labelled placeholder.

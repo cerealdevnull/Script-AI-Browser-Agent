@@ -1,5 +1,6 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.models.Secret
 import com.cereal.sdk.statemodifier.ScriptConfig
 import com.cereal.sdk.statemodifier.ScriptConfigValue
 import com.cereal.sdk.statemodifier.Visibility
@@ -19,12 +20,29 @@ class FormLayoutTest {
     @Test
     fun `Secret 2 appears once Secret 1 has a label, Secret 3 once Secret 2 has one`() {
         val empty = form()
-        assertEquals(Visibility.Hidden, Secret2State.getVisibility(empty))
-        assertEquals(Visibility.Hidden, Secret2State.getVisibility(form("secret1Name" to ScriptConfigValue.StringScriptConfigValue(" "))))
+        assertEquals(Visibility.Hidden, Secret2LabelState.getVisibility(empty))
+        assertEquals(Visibility.Hidden, Secret2LabelState.getVisibility(form("secret1Name" to ScriptConfigValue.StringScriptConfigValue(" "))))
         val oneLabel = form("secret1Name" to ScriptConfigValue.StringScriptConfigValue("email"))
-        assertEquals(Visibility.VisibleOptional, Secret2State.getVisibility(oneLabel))
-        assertEquals(Visibility.Hidden, Secret3State.getVisibility(oneLabel))
-        assertEquals(Visibility.VisibleOptional, Secret3State.getVisibility(form("secret2Name" to ScriptConfigValue.StringScriptConfigValue("password"))))
+        assertEquals(Visibility.VisibleOptional, Secret2LabelState.getVisibility(oneLabel))
+        assertEquals(Visibility.Hidden, Secret3LabelState.getVisibility(oneLabel))
+        assertEquals(Visibility.VisibleOptional, Secret3LabelState.getVisibility(form("secret2Name" to ScriptConfigValue.StringScriptConfigValue("password"))))
+    }
+
+    @Test
+    fun `secret errors show at Save under the field to fix`() {
+        fun label(text: String) = ScriptConfigValue.StringScriptConfigValue(text)
+        fun value(text: String) = ScriptConfigValue.SecretScriptConfigValue(Secret(text))
+
+        val noValue = form("secret1Name" to label(" Email "))
+        assertEquals("Enter the value for 'Email'", Secret1ValueState.getError(noValue))
+        assertEquals(null, Secret1LabelState.getError(noValue))
+
+        assertEquals("Give this value a label, e.g. password", Secret1LabelState.getError(form("secret1Value" to value("x"))))
+
+        val twice = form("secret1Name" to label("Email"), "secret1Value" to value("a"), "secret2Name" to label("email"), "secret2Value" to value("b"))
+        assertEquals(null, Secret1LabelState.getError(twice))
+        assertEquals("The label 'email' is already used by another secret", Secret2LabelState.getError(twice))
+        assertEquals(null, Secret2ValueState.getError(twice))
     }
 
     @Test

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -46,7 +47,9 @@ class OpenAiCompatibleClient(
                         }
                     },
                 )
-                put("messages", JsonArray(toJson(request)))
+                val messages = toJson(request)
+                // OpenRouter passes Anthropic's cache_control through: one breakpoint on the system prompt, one on the newest message.
+                put("messages", JsonArray(if (claude) messages.mapIndexed { i, m -> if (i == 0 || i == messages.lastIndex) cached(m) else m } else messages))
             }
         val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
         val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body, sleep)
@@ -55,7 +58,9 @@ class OpenAiCompatibleClient(
         val usage = json["usage"] as? JsonObject
         fun JsonObject?.long(key: String) = (this?.get(key) as? JsonPrimitive)?.longOrNull ?: 0L
         val prompt = usage.long("prompt_tokens")
-        val cached = (usage?.get("prompt_tokens_details") as? JsonObject).long("cached_tokens")
+        val details = usage?.get("prompt_tokens_details") as? JsonObject
+        val cached = details.long("cached_tokens")
+        val written = details.long("cache_write_tokens") // OpenRouter, for Claude
         // Gemini leaves thinking out of completion_tokens, so the real output is total − prompt.
         val output = maxOf(usage.long("total_tokens") - prompt, usage.long("completion_tokens"))
         return ModelTurn(
@@ -70,14 +75,29 @@ class OpenAiCompatibleClient(
             // A refusal comes as finish_reason "stop" with a refusal message; the agent knows Anthropic's "refusal".
             stopReason = if (message.str("refusal") != null) "refusal" else choice.str("finish_reason"),
             model = json.str("model"),
-            usage = Usage(prompt - cached, output, cacheRead = cached),
+            usage = Usage(prompt - cached - written, output, cacheRead = cached, cacheWrite = written),
             raw = message,
             text = message.str("content") ?: message.str("refusal"),
         )
     }
 
+    private val claude = "claude" in model.lowercase()
+
+    private fun cached(message: JsonObject): JsonObject {
+        val parts =
+            when (val content = message["content"]) {
+                is JsonNull -> return message
+                is JsonPrimitive -> listOf(buildJsonObject { put("type", "text"); put("text", content) })
+                is JsonArray -> content.map { it.jsonObject }
+                else -> return message
+            }.ifEmpty { return message }
+        val last = JsonObject(parts.last() + ("cache_control" to buildJsonObject { put("type", "ephemeral") }))
+        return JsonObject(message + ("content" to JsonArray(parts.dropLast(1) + last)))
+    }
+
     private fun toJson(request: ModelRequest): List<JsonObject> {
-        val keepWhole = request.messages.filterIsInstance<Message.ToolResults>().flatMap { it.results }.takeLast(KEEP_SNAPSHOTS).toSet()
+        // Claude keeps all of them: trimming rewrites an old message each step and so breaks the cached prefix.
+        val keepWhole = request.messages.filterIsInstance<Message.ToolResults>().flatMap { it.results }.takeLast(if (claude) Int.MAX_VALUE else KEEP_SNAPSHOTS).toSet()
         val system =
             buildJsonObject {
                 put("role", "system")

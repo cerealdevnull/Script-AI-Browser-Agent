@@ -299,7 +299,7 @@ class RepeatTest {
                 disagreeing,
                 {
                     val result = it.lastResults.single()
-                    assertTrue(result.isError && "Check" in result.text && "goal_met" in result.text, result.text)
+                    assertTrue(result.isError && "Check" in result.text && "you say the goal is not met" in result.text, result.text)
                     disagreeing(it)
                 },
                 disagreeing,
@@ -310,6 +310,68 @@ class RepeatTest {
         assertEquals(4, model.requests.size)
         assertNull(cache())
         assertTrue(host.logs.any { "replay cache not written" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `a finish that flips goal_met from false to true is rejected, and no Goal met is sent`() {
+        stock("Out of stock")
+        // A Check that is true now: finish 1 says not met (rejected), finish 2 resends it as met.
+        var ref = ""
+        val check = { r: ModelRequest ->
+            if (ref.isEmpty()) ref = r.textRef("StaticText", "Out of stock")
+            """{"ref": "$ref", "condition": "textContains", "expected": "Out of stock"}"""
+        }
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", """{"goal_met": false, "summary": "Out of stock.", "check": ${check(it)}}""")) },
+                {
+                    val result = it.lastResults.single().text
+                    assertTrue("it is true on the live page now, but you say the goal is not met" in result, result)
+                    assertTrue("pick a condition or element that is false now (e.g. textAbsent instead of textContains)" in result, result)
+                    listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "check": ${check(it)}}"""))
+                },
+                {
+                    val result = it.lastResults.single()
+                    assertTrue(result.isError && "goal_met was false; change the check, not goal_met. If you misread the page, call fail." in result.text, result.text)
+                    listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "check": ${check(it)}}"""))
+                },
+            )
+
+        task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
+
+        assertEquals(4, model.requests.size)
+        assertNull(cache())
+        assertTrue(host.notifications.none { "Now holds" in it.message || "Goal met" in it.message }, host.notifications.joinToString { it.message })
+    }
+
+    @Test
+    fun `a Repeat finish that says goal met but never verifies loops quietly`() {
+        stock("Out of stock")
+        // The Check is false on the page while the model says met: every finish fails verification.
+        var ref = ""
+        val met = { r: ModelRequest ->
+            if (ref.isEmpty()) ref = r.textRef("StaticText", "Out of stock")
+            listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "check": {"ref": "$ref", "condition": "textContains", "expected": "In stock"}}"""))
+        }
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                met,
+                {
+                    val result = it.lastResults.single().text
+                    assertTrue("it is false on the live page now, but you say the goal is met" in result, result)
+                    assertTrue("pick a condition or element that is true now" in result, result)
+                    met(it)
+                },
+                met,
+            )
+
+        task(model) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+
+        assertTrue(host.notifications.isEmpty(), host.notifications.joinToString { it.message })
+        assertNull(cache())
+        assertTrue(host.logs.any { it.startsWith("WARN") && "treated as not met" in it }, host.logs.joinToString("\n"))
     }
 
     @Test

@@ -725,6 +725,7 @@ class Agent(
             When the goal is achieved, or you have determined that it cannot be met, call finish with goal_met and a
             short summary for the user. Report only what the page shows; never guess values. To report values the user
             asked for, add readouts: a label and the ref and exact text of the element showing each value.
+            If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all.
             If you cannot make progress, call fail with the reason.
             """.trimIndent()
 

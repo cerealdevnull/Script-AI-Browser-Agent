@@ -136,6 +136,7 @@ internal class AgentScript(
                 log.error("Chrome could not be started: ${e.message}")
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
+        browser.log = { log.info(scrubber.forLog(it)) }
         val modelId = configuration.modelId()
         val modelPriced = Prices.cost(modelId, Usage(0, 0)) != null
         if (!priceAnnounced && !modelPriced) {

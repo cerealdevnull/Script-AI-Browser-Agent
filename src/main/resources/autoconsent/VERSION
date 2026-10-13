@@ -1,0 +1,4 @@
+@duckduckgo/autoconsent 16.43.1 (MPL-2.0) https://github.com/duckduckgo/autoconsent
+Vendored unmodified from the npm package: dist/autoconsent.playwright.js and rules/compact-rules.json.
+a2dedbf7755df45abf22952497ce65206b9295ee5d1e31211c4ced9f029d8825  autoconsent.playwright.js
+d8de32cdbfabfa6e0b4de93c9025a8bac50b23fb00775609ddff8ac4267f744a  compact-rules.json

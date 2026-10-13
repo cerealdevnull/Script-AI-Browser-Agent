@@ -28,6 +28,7 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,9 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
     private var frameOf: Map<Int, Frame> = emptyMap() // backendDOMNodeId -> its frame, for nodes inside a frame
     private var scrub: (String) -> String = { it } // the latest snapshot's, so a re-resolved name matches [names]
+
+    /** Where the browser's own log lines go (cookie banners it rejected). */
+    var log: (String) -> Unit = {}
 
     /** Bumped by each [snapshot] whose `[n]` refs point at other nodes than before: older `[n]` refs are stale. */
     var refsVersion = 0
@@ -433,12 +437,23 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             action()
             delay(300)
             tab.waitForReadyState(ReadyState.COMPLETE, pageLoadTimeoutMs)
+            consentSettled()
         } ?: url().let { throw PageLoadException("$it did not finish loading within ${pageLoadTimeoutMs / 1000} s", "timed out", it) }
         delay(300)
         if (url().startsWith("chrome-error:")) {
             val code = (tab.rawEvaluate("document.querySelector('.error-code')?.textContent || ''") as? JsonPrimitive)?.contentOrNull.orEmpty()
             if ("NAME_NOT_RESOLVED" in code || "NXDOMAIN" in code) throw PageLoadException("site not found", "site not found")
             throw PageLoadException("network error: the page could not be loaded", "network error")
+        }
+    }
+
+    /** Waits while autoconsent is rejecting a banner (capped at 3 s from page load) and logs each rejection. */
+    private suspend fun consentSettled() {
+        while (true) {
+            val state = tab.rawEvaluate(CONSENT_STATE_JS) as? JsonObject ?: return
+            state.getValue("rejected").jsonArray.forEach { log("Rejected cookies (${it.jsonPrimitive.content.lowercase()})") }
+            if (!state.getValue("busy").jsonPrimitive.boolean) return
+            delay(100)
         }
     }
 
@@ -561,6 +576,28 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             return found.map(e => ({text: text(e), enabled: !e.matches(':disabled') && e.getAttribute('aria-disabled') !== 'true'}));
         }"""
 
+        // Never waits for nothingDetected: a page without a banner costs no wait.
+        private const val CONSENT_STATE_JS = """(() => {
+            const c = window.__cerealConsent;
+            if (!c) return {busy: false, rejected: []};
+            const rejected = c.results.splice(0).filter(r => r.result).map(r => r.cmp);
+            const busy = ['cmpDetected', 'openPopupDetected', 'runningOptOut'].includes(c.state) && performance.now() < 3000;
+            return {busy, rejected};
+        })()"""
+
+        /** Our glue with the rules inlined, then the vendored autoconsent bundle (both unmodified, see autoconsent/VERSION). */
+        private val CONSENT_JS by lazy {
+            fun resource(name: String) = Browser::class.java.getResource(name)!!.readText()
+            resource("/consent-glue.js").replace("__RULES__", resource("/autoconsent/compact-rules.json")) + "\n" +
+                resource("/autoconsent/autoconsent.playwright.js")
+        }
+
+        /** Cookie banners get rejected on every new document of [tab] (its frames too) and once on the loaded one. */
+        private suspend fun injectConsent(tab: Tab) {
+            tab.page.enable() // without it Chrome doesn't run the script on new documents
+            tab.page.addScriptToEvaluateOnNewDocument(CONSENT_JS, runImmediately = true)
+        }
+
         private fun Accessibility.AXValue?.text() = (this?.value as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
 
         /** Starts Chrome on [profileDir], first killing a Chrome left over on it (a crashed run would block the profile). */
@@ -577,7 +614,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                     browserConnectionMaxTries = 90
                 },
                 pageLoadTimeoutMs,
-            )
+            ).also { injectConsent(it.tab) }
         }
 
         private fun killLeftover(profileDir: java.nio.file.Path) {

@@ -27,6 +27,12 @@ class CheckTest {
     private fun check(condition: String, expected: String = "50") = Check("{}", condition, expected, ",")
 
     @Test
+    fun `a missing frame is a miss for every condition, while no match makes exists false`() {
+        Check.CONDITIONS.forEach { assertNull(check(it).evaluate(null as List<Match>?), it) }
+        assertEquals(false, check("exists").evaluate(emptyList()))
+    }
+
+    @Test
     fun `thresholds compare the number with expected`() {
         assertEquals(true, check("atMost").holds(Match("€ 50", true)))
         assertEquals(false, check("below").holds(Match("€ 50", true)))

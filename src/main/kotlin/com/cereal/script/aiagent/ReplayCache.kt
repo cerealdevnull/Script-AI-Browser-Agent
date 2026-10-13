@@ -41,8 +41,11 @@ class Step(val action: String, val fingerprint: String?, val args: JsonObject, v
 @Serializable
 class Check(val fingerprint: String, val condition: String, val expected: String? = null, val decimal: String? = null) {
     /** True/false on the live page; null when the target has no unique match (a miss, not "not yet"). */
-    suspend fun evaluate(browser: Browser): Boolean? {
-        val matches = browser.matches(Fingerprint(fingerprint))
+    suspend fun evaluate(browser: Browser): Boolean? = evaluate(browser.matches(Fingerprint(fingerprint)))
+
+    /** [evaluate] on what [Browser.matches] returned: null [matches] (its frame is missing) is a miss too. */
+    fun evaluate(matches: List<Match>?): Boolean? {
+        if (matches == null) return null
         if (condition == "exists") return if (matches.size > 1) null else matches.size == 1
         return holds(matches.singleOrNull() ?: return null)
     }

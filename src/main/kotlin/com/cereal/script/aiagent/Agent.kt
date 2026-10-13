@@ -452,17 +452,19 @@ class Agent(
         if (!numeric && decimal != null) return null to "Check: decimal is only for below / atMost / above / atLeast / decreased; set it to null"
         return try {
             var check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected, decimal)
+            // Resolved once: the change baseline, the number count and the evaluation all read the same match.
+            val matches = browser.matches(Fingerprint(check.fingerprint))
+            val text = matches?.singleOrNull()?.text
             // A change Check's baseline is the element's text now, read by the script.
-            if (change) check = check.rebased(browser.matches(Fingerprint(check.fingerprint)).singleOrNull()?.text ?: "")
+            if (change) check = check.rebased(text ?: "")
             if (numeric) {
-                val text = browser.matches(Fingerprint(check.fingerprint)).singleOrNull()?.text
                 val count = text?.let { Check.numbers(it, decimal!!).size }
                 if (count != null && count != 1) {
                     // Page text reaches the model only inside <page_content>.
                     return null to "Check: <page_content>$text</page_content> holds $count numbers; pick a ref showing only the current price"
                 }
             }
-            when (check.evaluate(browser)) {
+            when (check.evaluate(matches)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
                 else ->
@@ -549,9 +551,11 @@ class Agent(
                 place = "the result check"
                 at = "the check"
                 failed = at
+                // Read once: a change Check's new baseline is the very match it was evaluated on.
+                val checkMatches = cache.check?.let { browser.matches(Fingerprint(it.fingerprint)) }
                 val goalMet =
                     cache.check?.let {
-                        it.evaluate(browser) ?: run {
+                        it.evaluate(checkMatches) ?: run {
                             checkMissed = true
                             throw Miss("the check's target does not match exactly one node", "the check's target is gone")
                         }
@@ -565,7 +569,7 @@ class Agent(
                                 ?: throw Miss("readout '${r.label}' does not match exactly one node", "the readout '${r.label}' is gone")
                         Readout(r.label, text, Fingerprint(r.fingerprint))
                     }
-                val moved = cache.check?.takeIf { goalMet && it.isChange }?.let { rebase(it) }
+                val moved = cache.check?.takeIf { goalMet && it.isChange }?.rebased(checkMatches!!.single().text)
                 return Outcome.Finished(goalMet, "", 0, readouts, check = moved, recorded = cache.steps)
             } catch (e: Miss) {
                 e
@@ -595,12 +599,11 @@ class Agent(
         val new = (healed as? Outcome.Finished)?.check?.takeIf { it.condition == old?.condition } ?: return healed
         healed as Outcome.Finished
         val kept = new.rebased(old!!.expected.orEmpty())
-        val met = runCatching { kept.evaluate(browser) }.getOrNull() == true
-        return Outcome.Finished(met, healed.summary, healed.steps, healed.readouts, healed.verified, if (met) rebase(kept) else kept, healed.recorded)
+        val matches = runCatching { browser.matches(Fingerprint(kept.fingerprint)) }.getOrNull()
+        val met = kept.evaluate(matches) == true
+        // Met means exactly one match: the new baseline is the text it was evaluated on.
+        return Outcome.Finished(met, healed.summary, healed.steps, healed.readouts, healed.verified, if (met) kept.rebased(matches!!.single().text) else kept, healed.recorded)
     }
-
-    /** [check] with the element's text now as its baseline. */
-    private suspend fun rebase(check: Check) = check.rebased(browser.matches(Fingerprint(check.fingerprint)).single().text)
 
     /** A replay miss: [rule] for the log, [failed] for the healing model. */
     private class Miss(val rule: String, val failed: String) : Exception(rule)

@@ -399,12 +399,12 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     }
 
     /** The whitespace-collapsed text of every node [fingerprint] matches on the live page: unique when size is 1. */
-    suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).map { it.text }
+    suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).orEmpty().map { it.text }
 
-    /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled. */
-    suspend fun matches(fingerprint: Fingerprint): List<Match> {
+    /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled; null when its frame is missing (a miss). */
+    suspend fun matches(fingerprint: Fingerprint): List<Match>? {
         val frame = Json.parseToJsonElement(fingerprint.json).jsonObject["frame"]?.jsonObject
-        val found = evaluateIn(frame, "($RESOLVE_JS)(${fingerprint.json})", byValue = true)?.value as? JsonArray ?: return emptyList()
+        val found = evaluateIn(frame, "($RESOLVE_JS)(${fingerprint.json})", byValue = true)?.value as? JsonArray ?: return null
         return found.map {
             Match(it.jsonObject.getValue("text").jsonPrimitive.content, it.jsonObject.getValue("enabled").jsonPrimitive.boolean)
         }

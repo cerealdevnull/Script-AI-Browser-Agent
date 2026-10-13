@@ -65,13 +65,13 @@ internal data class ResultMessage(
     private fun telegram(goal: String): TelegramMessage {
         fun text(summaryMax: Int, valueMax: Int) =
             (
-                listOfNotNull("${kind.emoji} <b>${esc(headline)}</b>", richAction?.let(::esc)) +
+                listOfNotNull("${kind.emoji} <b>${esc(headline.cut(256))}</b>", richAction?.let { esc(it.cut(512)) }) +
                     readouts.map { (l, t) -> "${esc(l)}: <b>${esc(t.cut(valueMax))}</b>" } +
                     listOfNotNull(summary?.let { "<i>${esc(it.cut(summaryMax))}</i>" }) +
-                    notes.map(::esc) +
+                    notes.map { esc(it.cut(512)) } +
                     listOfNotNull(
                         listOfNotNull(url?.let { "<a href=\"${esc(it).replace("\"", "&quot;")}\">Open page</a>" }, cost?.let(::esc)).joinToString(" · ").ifEmpty { null },
-                        esc(goal),
+                        esc(goal.cut(100)),
                     )
                 ).joinToString("\n")
         val text = fit(TELEGRAM_MAX, ::text) { it.length }
@@ -80,7 +80,7 @@ internal data class ResultMessage(
 
     /**
      * Renders with the summary cut first, then the Readout values, until [size] is within [max]. ponytail: the
-     * headline, labels and notes are never cut, so 25+ very long labels could still overflow; nothing makes those today.
+     * Readout labels are never cut (headline, action, notes and goal have fixed caps), so many very long labels could still overflow; nothing makes those today.
      */
     private fun <T> fit(max: Int, render: (Int, Int) -> T, size: (T) -> Int): T {
         var summaryMax = summary?.length ?: 0

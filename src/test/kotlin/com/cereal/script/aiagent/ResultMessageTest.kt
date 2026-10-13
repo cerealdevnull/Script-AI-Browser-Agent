@@ -151,6 +151,14 @@ class ResultMessageTest {
     }
 
     @Test
+    fun `a 4,000-character goal, a long headline, action and notes still fit Telegram, keeping the cost line`() {
+        val m = onceMet.copy(headline = "h".repeat(3000), action = "a".repeat(3000), notes = listOf("n".repeat(3000)))
+        val text = m.notification("g".repeat(4000)).telegramMessage!!.text
+        assertTrue(text.length <= 4096, "Telegram text is ${text.length} characters")
+        assertTrue("Cost: $0.01" in text && text.startsWith("✅ <b>hhh"), text)
+    }
+
+    @Test
     fun `a URL with an underscore and text with angle brackets and ampersands arrive escaped and unbroken`() {
         val link = "https://shop.test/long_nose_pliers?a=1&b=2"
         val n = onceMet.copy(headline = "Pliers <b>& co</b> in stock.", readouts = listOf("Name" to "Tom & Jerry's <tools>"), url = link).notification(goal)

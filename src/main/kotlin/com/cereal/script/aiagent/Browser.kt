@@ -242,8 +242,10 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             val all = frames ?: frames().also { frames = it }
             val child = all.firstOrNull { it.id == tab.dom.describeNode(backendNodeId = backendId).node.frameId }
             val site = child?.url?.let(::hostOf)
+            // about:blank and about:srcdoc frames have no host: they inherit the page's origin.
+            val sameSite = child?.url?.startsWith("about:") == true || (site != null && registrableDomain(site) == pageSite)
             val tree =
-                if (child == null || site == null || registrableDomain(site) != pageSite) null
+                if (child == null || !sameSite) null
                 else runCatching { tab.accessibility.getFullAXTree(frameId = child.id).nodes }.getOrNull()
             if (child == null || tree == null) {
                 out.append(" (cross-origin: ${site ?: "?"}, not visible)")

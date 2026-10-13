@@ -23,6 +23,12 @@ class FrameTest {
         stockFrame("Out of stock")
         site.pages["ad.html"] = """<html><body><button>Ad</button></body></html>"""
         site.pages["inner.html"] = """<html><body><button>Inner</button></body></html>"""
+        // Like w3schools' iframeResult: an about:blank frame the page fills by script, and a srcdoc frame.
+        site.pages["blank.html"] =
+            """<html><body><h1>Shop</h1><iframe id="f"></iframe>
+              <iframe srcdoc="<button>Srcdoc</button>"></iframe>
+              <script>document.getElementById('f').contentDocument.body.innerHTML =
+                '<h2>Long Nose Pliers</h2><dl><dt>Stock:</dt><dd>Out of stock</dd></dl><button>Refresh</button>'</script></body></html>"""
     }
 
     @AfterTest
@@ -57,19 +63,33 @@ class FrameTest {
             }
         }
 
+    @Test
+    fun `about blank and srcdoc frames inherit the page's site and are shown inline`() =
+        runBlocking {
+            val browser = Browser.launch(profiles)
+            try {
+                browser.navigate(site.url("blank.html"))
+                val snapshot = browser.snapshot()
+                assertTrue("button \"Refresh\"" in snapshot && "button \"Srcdoc\"" in snapshot, snapshot)
+                assertTrue("not visible" !in snapshot, snapshot)
+            } finally {
+                browser.close()
+            }
+        }
+
     private val goal = "Tell me whether Long Nose Pliers is in stock"
 
-    private fun config() = TestConfig(goal = goal, startUrl = site.url("shop.html"), runMode = RunMode.Repeat, repeatInterval = 7)
+    private fun config(page: String = "shop.html") = TestConfig(goal = goal, startUrl = site.url(page), runMode = RunMode.Repeat, repeatInterval = 7)
 
-    private fun task(model: ModelClient, block: suspend (execute: suspend () -> ExecutionResult) -> Unit) =
+    private fun task(model: ModelClient, page: String = "shop.html", block: suspend (execute: suspend () -> ExecutionResult) -> Unit) =
         runBlocking {
             val script = AgentScript({ model }, profiles)
             val provider = host.create()
-            assertTrue(script.onStart(config(), provider))
+            assertTrue(script.onStart(config(page), provider))
             try {
-                block { script.execute(config(), provider) {} }
+                block { script.execute(config(page), provider) {} }
             } finally {
-                script.onFinish(config(), provider)
+                script.onFinish(config(page), provider)
             }
         }
 
@@ -89,6 +109,18 @@ class FrameTest {
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, model.requests.size)
             assertTrue("Iframe marked \"not visible\" can't be read or used" in model.requests[0].system, model.requests[0].system)
+
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(2, model.requests.size, "the replay makes no model call")
+        }
+    }
+
+    @Test
+    fun `a learned click, Check and Readout inside a script-filled about blank frame replay with zero model calls`() {
+        val model = ScriptedModel(clickRefresh, notMet)
+        task(model, "blank.html") { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(2, model.requests.size)
 
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, model.requests.size, "the replay makes no model call")

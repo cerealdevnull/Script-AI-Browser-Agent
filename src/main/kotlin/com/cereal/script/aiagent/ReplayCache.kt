@@ -126,4 +126,4 @@ class Check(val fingerprint: String, val condition: String, val expected: String
 class CachedReadout(val label: String, val fingerprint: String)
 
 // ponytail: host + path, so a changed query string still matches; use a real pattern if sites put ids in the path.
-fun urlPattern(url: String): String = runCatching { URI(url).let { "${it.host}${it.path}" } }.getOrDefault(url)
+fun urlPattern(url: String): String = runCatching { URI(url).let { if (it.isOpaque) url else "${it.host}${it.path}" } }.getOrDefault(url)

@@ -151,10 +151,16 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         val newRefs = mutableMapOf<Int, Int>()
         val newNames = mutableMapOf<Int, String>()
         val newTextRefs = mutableMapOf<String, Int>()
+        val root = nodes.firstOrNull { it.parentId == null }
+        val popups = openPopups(nodes, byId, root?.nodeId)
+        val printed = mutableSetOf<String>()
         val out = StringBuilder()
+        var inPopups = true
 
         fun walk(id: String, depth: Int, parentName: String) {
+            if (id in printed || (id in popups && !inPopups)) return
             val node = byId[id] ?: return
+            printed += id
             val role = node.role.text()
             val name = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
             var childDepth = depth
@@ -184,13 +190,43 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             }
             node.childIds?.forEach { walk(it, childDepth, name.ifEmpty { parentName }) }
         }
-        nodes.firstOrNull { it.parentId == null }?.let { walk(it.nodeId, 0, "") }
+        popups.forEach { walk(it, 0, "") }
+        val popupText = out.toString()
+        out.clear()
+        inPopups = false
+        root?.let { walk(it.nodeId, 0, "") }
         if (newRefs != refs) refsVersion++
         if (newTextRefs != textRefs) textRefsVersion++
         refs = newRefs
         names = newNames
         textRefs = newTextRefs
-        return if (out.length > MAX_CHARS) out.substring(0, MAX_CHARS) + "\n…(truncated)" else out.toString()
+        val page = out.cut(MAX_CHARS)
+        return if (popupText.isEmpty()) page else "— open popup —\n${popupText.cut(MAX_POPUP_CHARS).trimEnd()}\n— page —\n$page"
+    }
+
+    /**
+     * The open popups, in DOM order: the `controls` targets of every `expanded` node plus every dialog. Printed first,
+     * so a dropdown a site renders at the end of a long page is never cut off.
+     */
+    private fun openPopups(nodes: List<Accessibility.AXNode>, byId: Map<String, Accessibility.AXNode>, root: String?): List<String> {
+        val byBackend = nodes.filter { !it.ignored && it.backendDOMNodeId != null }.associateBy { it.backendDOMNodeId }
+        val ids = mutableSetOf<String>()
+        nodes.filter { !it.ignored }.forEach { node ->
+            if (node.role.text() in DIALOGS) ids += node.nodeId
+            val props = node.properties.orEmpty()
+            if (props.any { it.name.name.lowercase() == "expanded" && it.value.text() == "true" }) {
+                props.filter { it.name.name.lowercase() == "controls" }.flatMap { it.value.relatedNodes.orEmpty() }
+                    .mapNotNullTo(ids) { byBackend[it.backendDOMNodeId]?.nodeId }
+            }
+        }
+        if (ids.isEmpty() || root == null) return emptyList()
+        val order = mutableListOf<String>()
+        fun visit(id: String) {
+            if (id in ids) order += id
+            byId[id]?.childIds?.forEach(::visit)
+        }
+        visit(root)
+        return order
     }
 
     /**
@@ -290,6 +326,10 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     companion object {
         private const val MAX_CHARS = 14_000
+        private const val MAX_POPUP_CHARS = 6_000
+        private val DIALOGS = setOf("dialog", "alertdialog")
+
+        private fun CharSequence.cut(max: Int) = if (length > max) substring(0, max) + "\n…(truncated)" else toString()
         private val TEXT_INPUT_TYPES = setOf("", "text", "email", "password", "search", "tel", "url")
         private val WHITESPACE = Regex("\\s+")
         private val SENSITIVE = Regex("password|passwd|e-?mail|cc-|card|cvc|cvv|iban")

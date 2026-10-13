@@ -6,6 +6,7 @@ import dev.kdriver.cdp.domain.browser
 import dev.kdriver.cdp.domain.dom
 import dev.kdriver.cdp.domain.input
 import dev.kdriver.cdp.domain.runtime
+import dev.kdriver.cdp.domain.target
 import dev.kdriver.core.browser.createBrowser
 import dev.kdriver.core.dom.DefaultElement
 import dev.kdriver.core.tab.ReadyState
@@ -29,9 +30,16 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
 import dev.kdriver.core.browser.Browser as KBrowser
 
-/** The user's Chrome, headed, on a persistent profile; one tab. Element refs come from the latest [snapshot]. */
+/**
+ * The user's Chrome, headed, on a persistent profile. It acts in the current tab: the original one, or a tab an action
+ * of the agent opened ([follow]). Element refs come from the latest [snapshot].
+ */
 class Browser private constructor(private val browser: KBrowser, private val pageLoadTimeoutMs: Long) {
-    private val tab: Tab get() = browser.mainTab ?: error("Chrome has no open tab")
+    private val original: Tab? = browser.mainTab
+    private var current: Tab? = null // null: the original tab
+    private val tab: Tab get() = current ?: original ?: browser.mainTab ?: error("Chrome has no open tab")
+    private val followed = mutableSetOf<String>() // target ids of tabs the agent switched to
+    private var known = emptySet<String>() // target ids open at the previous follow
     private var refs: Map<Int, Int> = emptyMap() // ref -> backendDOMNodeId
     private var names: Map<Int, String> = emptyMap() // ref -> role "name"
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
@@ -87,9 +95,66 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         settle()
     }
 
+    /** Back in history; on a followed tab with no history, closes it (the next [follow] returns to its opener). */
     suspend fun goBack() {
+        if (tab.targetId in followed && (tab.rawEvaluate("history.length") as? JsonPrimitive)?.contentOrNull == "1") {
+            browser.connection!!.target.closeTarget(tab.targetId!!)
+            return
+        }
         tab.back()
         settle()
+    }
+
+    /**
+     * Before a snapshot: when the current tab closed, moves to its opener (else the original tab); then switches to
+     * the newest tab the current tab opened since the previous call, and waits for it to load. [switch] false only
+     * takes note of new tabs (ones the start page opened by itself, not an action of the agent). Returns what changed,
+     * for the model and the log.
+     */
+    suspend fun follow(switch: Boolean = true): String? {
+        val pages = pages()
+        val open = pages.map { it.targetId }.toSet()
+        var note: String? = null
+        if (tab.targetId !in open) {
+            val opener = tab.openerId
+            browser.updateTargets()
+            current = browser.tabs.firstOrNull { it.targetId == opener && opener in open && it.targetId != original?.targetId }
+            invalidateRefs()
+            note = "That tab closed; back on ${url()}"
+        }
+        val fresh = pages.filter { it.targetId !in known && it.openerId == tab.targetId }.map { it.targetId }
+        known = open
+        if (switch && fresh.isNotEmpty()) {
+            browser.updateTargets()
+            browser.tabs.lastOrNull { it.targetId in fresh }?.let {
+                current = it
+                followed += it.targetId!!
+                invalidateRefs()
+                settle()
+                note = "Now in a new tab: ${url()}"
+            }
+        }
+        return note
+    }
+
+    /** True when the current tab closed since the last [follow] (an action can't run there). */
+    suspend fun tabClosed(): Boolean = pages().none { it.targetId == tab.targetId }
+
+    private suspend fun pages() = browser.connection!!.target.getTargets().targetInfos.filter { it.type == "page" }
+
+    /** At the start of a goal run: closes every tab the agent followed and makes the original tab current again. */
+    suspend fun reset() {
+        val open = pages().map { it.targetId }.toSet()
+        followed.filter { it in open }.forEach { browser.connection!!.target.closeTarget(it) }
+        followed.clear()
+        if (current != null) invalidateRefs()
+        current = null
+    }
+
+    private fun invalidateRefs() {
+        refs = emptyMap()
+        names = emptyMap()
+        textRefs = emptyMap()
     }
 
     suspend fun wait(seconds: Int) {

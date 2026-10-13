@@ -66,10 +66,11 @@ class FailureTest {
 
     @Test
     fun `a Chrome that won't start asks to check the Chrome install`() {
-        val notADir = java.nio.file.Files.createTempFile("profiles", "")
+        // A profile path under a file isn't enough: Chrome on Linux falls back to a temporary profile and starts anyway.
         val model = ScriptedModel()
+        val script = AiAgentScript({ model }, launchBrowser = { _, _ -> throw java.io.IOException("no chrome") })
 
-        val result = runBlocking { host.run(AiAgentScript({ model }, notADir), TestConfig(startUrl = site.url())) }
+        val result = runBlocking { host.run(script, TestConfig(startUrl = site.url())) }
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals(

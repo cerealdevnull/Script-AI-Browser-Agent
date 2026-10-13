@@ -24,6 +24,7 @@ class AiAgentScript(
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
     private val pageLoadTimeoutMs: Long = 60_000,
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val launchBrowser: suspend (Path, Long) -> Browser = Browser::launch,
 ) : Script<AgentConfiguration> {
     private var configError: String? = null
     private var browser: Browser? = null
@@ -100,7 +101,7 @@ class AiAgentScript(
                     dead.close()
                 }
                 statusUpdate("Starting Chrome")
-                Browser.launch(profilesDir.resolve(profileName(configuration, provider)), pageLoadTimeoutMs).also { this.browser = it }
+                launchBrowser(profilesDir.resolve(profileName(configuration, provider)), pageLoadTimeoutMs).also { this.browser = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -78,7 +78,9 @@ class ScriptJarTest {
                     } as ScriptConfiguration
 
                 @Suppress("UNCHECKED_CAST")
-                // As the host's TaskExecutor.newInstance: the first Kotlin constructor, called with no arguments.
+                // As the host's TaskExecutor.newInstance: the first Kotlin constructor, called with no arguments. Its kotlin-reflect
+                // rejects a constructor with parameters even when all have defaults, so the jar's class must have just the no-arg one.
+                assertEquals(listOf(0), scriptClass.constructors.map { it.parameterCount })
                 val script = scriptClass.kotlin.constructors.first().call() as Script<ScriptConfiguration>
                 val host = Host()
                 val provider = host.create()

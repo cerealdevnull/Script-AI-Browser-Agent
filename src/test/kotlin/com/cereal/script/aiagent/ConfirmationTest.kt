@@ -21,7 +21,7 @@ class ConfirmationTest {
     private fun run(model: ScriptedModel, startPath: String) =
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(
                     goal = "Buy one Claw Hammer",
                     startUrl = site.url(startPath),

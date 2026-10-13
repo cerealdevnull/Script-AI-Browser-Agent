@@ -19,7 +19,7 @@ class CapsTest {
     private fun run(model: ScriptedModel, maxSteps: Int = 40, maxRunCost: Double = 3.0, maxTaskCost: Double = 10.0) =
         runBlocking {
             val config = TestConfig(startUrl = site.url(), maxSteps = maxSteps, maxRunCost = maxRunCost, maxTaskCost = maxTaskCost)
-            host.run(AiAgentScript({ model }, tempProfiles()), config)
+            host.run(AgentScript({ model }, tempProfiles()), config)
         }
 
     private val readForever: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("read_page")) }
@@ -102,7 +102,7 @@ class CapsTest {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf("llama3.3:70b"))
         val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
 
-        val result = runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+        val result = runBlocking { host.run(AgentScript({ model }, tempProfiles()), config) }
 
         assertIs<ExecutionResult.Success>(result)
         assertTrue(host.statuses.indexOf(line) in 0 until host.statuses.indexOfFirst { it.startsWith("Step 1") }, host.statuses.joinToString("\n"))
@@ -129,7 +129,7 @@ class CapsTest {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf("llama3.3:70b"))
         val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
 
-        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+        runBlocking { host.run(AgentScript({ model }, tempProfiles()), config) }
 
         assertEquals("Step 1 of 40 · \$? · Thinking…", host.statuses.first { it.startsWith("Step 1") })
         assertEquals("In stock.\nCost: unknown (no price for llama3.3:70b)", host.notifications.single().message)
@@ -140,7 +140,7 @@ class CapsTest {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) }, models = listOf(null))
         val config = TestConfig(startUrl = site.url(), provider = Provider.Custom, baseUrl = "http://localhost:11434/v1", model = "llama3.3:70b")
 
-        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+        runBlocking { host.run(AgentScript({ model }, tempProfiles()), config) }
 
         assertEquals("In stock.\nCost: unknown (no price for unknown model)", host.notifications.single().message)
     }

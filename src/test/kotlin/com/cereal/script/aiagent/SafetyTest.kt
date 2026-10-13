@@ -24,7 +24,7 @@ class SafetyTest {
     private fun run(model: ScriptedModel, startPath: String, allowedDomains: List<String> = emptyList()) =
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(
                     goal = "Log in",
                     startUrl = site.url(startPath),

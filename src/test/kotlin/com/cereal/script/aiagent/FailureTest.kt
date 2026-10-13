@@ -17,7 +17,7 @@ class FailureTest {
     fun tearDown() = site.close()
 
     private fun run(model: ModelClient, startUrl: String = site.url(), pageLoadTimeoutMs: Long = 60_000) =
-        runBlocking { host.run(AiAgentScript({ model }, tempProfiles(), pageLoadTimeoutMs), TestConfig(startUrl = startUrl)) }
+        runBlocking { host.run(AgentScript({ model }, tempProfiles(), pageLoadTimeoutMs), TestConfig(startUrl = startUrl)) }
 
     private fun failingModel(e: ModelException) =
         object : ModelClient {
@@ -68,7 +68,7 @@ class FailureTest {
     fun `a Chrome that won't start asks to check the Chrome install`() {
         // A profile path under a file isn't enough: Chrome on Linux falls back to a temporary profile and starts anyway.
         val model = ScriptedModel()
-        val script = AiAgentScript({ model }, launchBrowser = { _, _ -> throw java.io.IOException("no chrome") })
+        val script = AgentScript({ model }, launchBrowser = { _, _ -> throw java.io.IOException("no chrome") })
 
         val result = runBlocking { host.run(script, TestConfig(startUrl = site.url())) }
 

@@ -21,7 +21,7 @@ class SecretsTest {
     private fun run(model: ScriptedModel) =
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(
                     goal = "Log in",
                     startUrl = site.url("login.html"),
@@ -76,7 +76,7 @@ class SecretsTest {
 
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(
                     goal = "Log in with my email",
                     startUrl = site.url("login.html"),
@@ -118,7 +118,7 @@ class SecretsTest {
 
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(long))),
             )
         }
@@ -159,7 +159,7 @@ class SecretsTest {
         fun runAs(email: String) =
             runBlocking {
                 host.run(
-                    AiAgentScript({ ScriptedModel({ listOf(call("fail", """{"reason": "x"}""")) }) }, profiles),
+                    AgentScript({ ScriptedModel({ listOf(call("fail", """{"reason": "x"}""")) }) }, profiles),
                     TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(email))),
                 )
             }
@@ -175,7 +175,7 @@ class SecretsTest {
         runBlocking {
             site.pages["me.html"] = """<html><body>$page<input aria-label="Email address"></body></html>"""
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(goal = "Show my balance", startUrl = site.url("me.html"), secrets = listOf("email" to Secret(EMAIL))),
             )
         }

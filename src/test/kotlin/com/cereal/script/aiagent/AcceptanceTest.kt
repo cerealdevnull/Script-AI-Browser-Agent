@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
 /** One task start of the real script (real Anthropic adapter via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
 private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
     // Presets ignore the Server URL, so point the real Anthropic adapter at the recorder here.
-    private val script = AiAgentScript({ AnthropicClient(traffic.baseUrl, it.apiKey()!!.reveal(), it.model()!!) }, profiles)
+    private val script = AgentScript({ AnthropicClient(traffic.baseUrl, it.apiKey()!!.reveal(), it.model()!!) }, profiles)
     private val provider = host.create()
 
     /** One goal run (one execute), reported as a results row. */

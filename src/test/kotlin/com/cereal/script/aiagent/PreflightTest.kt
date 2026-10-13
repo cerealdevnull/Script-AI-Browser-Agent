@@ -23,7 +23,7 @@ class PreflightTest {
     private fun reply(code: Int, body: String = "{}") = api.enqueue(MockResponse.Builder().code(code).body(body).build())
 
     private fun run(config: TestConfig = TestConfig(model = "claude-sonet-5-5")) =
-        runBlocking { host.run(AiAgentScript({ AnthropicClient(base, "sk-wrong", it.model()!!) { } }, tempProfiles()), config) }
+        runBlocking { host.run(AgentScript({ AnthropicClient(base, "sk-wrong", it.model()!!) { } }, tempProfiles()), config) }
 
     @Test
     fun `a wrong key is reported with the key link before Chrome starts`() {
@@ -64,7 +64,7 @@ class PreflightTest {
     fun `an unreachable server makes a Repeat run retry at the next interval`() {
         repeat(12) { reply(503) }
         val config = TestConfig(model = "claude-sonet-5-5", runMode = RunMode.Repeat)
-        val script = AiAgentScript({ AnthropicClient(base, "k", it.model()!!) { } }, tempProfiles())
+        val script = AgentScript({ AnthropicClient(base, "k", it.model()!!) { } }, tempProfiles())
         val provider = host.create()
 
         runBlocking {

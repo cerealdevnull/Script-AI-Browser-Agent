@@ -11,7 +11,7 @@ Spec: [desktop-client#69](https://github.com/Cereal-Automation/desktop-client/is
 ## Commands
 ```sh
 ./gradlew test           # tests: execute() with a scripted model and real Chrome on local fixture pages
-./gradlew test -Pheadless=true  # same, with Chrome headless (no window, no xvfb needed)
+./gradlew test -Pheadless=true  # same, with Chrome headless (no window, no xvfb needed); the default under Claude Code
 ./gradlew scriptJar      # shrunk script jar -> build/cereal/release.jar (~5.5 MB)
 ./gradlew scriptJarTest  # loads that jar through a host-like ScriptClassLoader and runs one goal
 ```

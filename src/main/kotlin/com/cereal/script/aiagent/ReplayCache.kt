@@ -8,9 +8,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
 import java.security.MessageDigest
 
-/** What a finished goal run learned ([met]: that run met the goal): replayed later without the model. Stored in `preference` under [key]. */
+/** What a finished goal run learned ([met]: that run met the goal; null in caches written before it was stored): replayed later without the model. Stored in `preference` under [key]. */
 @Serializable
-class ReplayCache(val steps: List<Step>, val check: Check? = null, val readouts: List<CachedReadout> = emptyList(), val met: Boolean = false) {
+class ReplayCache(val steps: List<Step>, val check: Check? = null, val readouts: List<CachedReadout> = emptyList(), val met: Boolean? = null) {
     fun toJson() = Json.encodeToString(serializer(), this)
 
     companion object {

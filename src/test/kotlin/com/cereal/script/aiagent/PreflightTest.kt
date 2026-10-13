@@ -80,9 +80,10 @@ class PreflightTest {
         runBlocking {
             fun client(model: String) = OpenAiCompatibleClient(base, "k", model) { }
             val list = """{"data":[{"id":"gpt-5.6-luna"},{"id":"models/gemini-3.8-flash"},{"id":"x/no-tools","supported_parameters":["temperature"]}]}"""
-            repeat(4) { reply(200, list) }
+            repeat(5) { reply(200, list) }
             assertNull(client("gpt-5.6-luna").check())
             assertNull(client("gemini-3.8-flash").check())
+            assertNull(client("models/gemini-3.8-flash").check(), "Gemini's own models/<id> form, as the form accepts it")
             assertEquals(Preflight.UnknownModel, client("gpt-6-sol").check())
             assertEquals(Preflight.NoTools, client("x/no-tools").check())
             assertEquals("/models", api.takeRequest().url.encodedPath)

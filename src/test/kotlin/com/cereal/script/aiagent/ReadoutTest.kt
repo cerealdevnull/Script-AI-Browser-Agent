@@ -57,6 +57,15 @@ class ReadoutTest {
     }
 
     @Test
+    fun `a replay without a Check keeps the learned run's not met`() {
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": false, "summary": "Not paid yet.", "readouts": ${readouts(it)}}""")) }))
+
+        run(ScriptedModel())
+
+        assertTrue(host.notifications.last().message.startsWith("Goal not met\n"), host.notifications.last().message)
+    }
+
+    @Test
     fun `an action tool given a text ref returns a tool error`() {
         val model =
             ScriptedModel(

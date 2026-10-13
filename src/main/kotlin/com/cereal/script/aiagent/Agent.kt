@@ -522,7 +522,7 @@ class Agent(
                             checkMissed = true
                             throw Miss("the check's target does not match exactly one node", "the check's target is gone")
                         }
-                    } ?: true
+                    } ?: cache.met ?: true // no Check: the learned run's own verdict
                 val readouts =
                     cache.readouts.map { r ->
                         at = "readout '${r.label}'"

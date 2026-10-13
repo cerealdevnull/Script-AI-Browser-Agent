@@ -97,7 +97,8 @@ class OpenAiCompatibleClient(
             }
         // A list in another shape can't tell. OpenRouter serves `<id>:nitro` etc. without listing them.
         val data = json["data"] as? JsonArray ?: return null
-        val entry = data.mapNotNull { it as? JsonObject }.firstOrNull { it.str("id")?.removePrefix("models/").let { id -> id == model || id == model.substringBefore(':') } }
+        val wanted = model.removePrefix("models/") // the form accepts Gemini's own `models/<id>` too
+        val entry = data.mapNotNull { it as? JsonObject }.firstOrNull { it.str("id")?.removePrefix("models/").let { id -> id == wanted || id == wanted.substringBefore(':') } }
         val params = entry?.get("supported_parameters") as? JsonArray
         return when {
             entry == null -> if (custom) null else Preflight.UnknownModel

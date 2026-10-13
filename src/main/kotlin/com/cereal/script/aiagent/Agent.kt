@@ -721,6 +721,7 @@ class Agent(
             Elements you can act on carry a [ref] number; refs are only valid for the most recent snapshot.
             Static text, cells and headings carry a read-only [tN] ref: only finish's readouts accept those.
             Every action returns a fresh snapshot, so you rarely need read_page.
+            An Iframe marked "not visible" can't be read or used: its content is not in the snapshot.
             When the goal is achieved, or you have determined that it cannot be met, call finish with goal_met and a
             short summary for the user. Report only what the page shows; never guess values. To report values the user
             asked for, add readouts: a label and the ref and exact text of the element showing each value.

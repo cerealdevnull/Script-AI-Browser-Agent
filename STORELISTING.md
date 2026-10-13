@@ -17,6 +17,7 @@ Describe a goal in plain language and a start URL, and the agent drives your ins
 - **On next start** lets you forget the learned steps, or also sign out, when a site changed or the agent keeps doing the wrong thing
 - Navigation stays on the start URL's domain plus any domains you allow (e.g. a login or payment provider)
 - Visible Chrome window with a separate profile per task, so sign-ins persist between runs
+- Rejects cookie consent banners itself (never accepts all), so no steps or money go to them
 - Stops when it repeats the same action without progress
 - Works with Anthropic or any OpenAI-compatible server; your API key is sent only to the provider you choose
 
@@ -37,3 +38,5 @@ Describe a goal in plain language and a start URL, and the agent drives your ins
   - OpenRouter: https://openrouter.ai/settings/keys
   - or any OpenAI-compatible server, including local ones such as Ollama or LM Studio
 - Model usage is billed by your provider; about $0.20 a run with the default model (an estimate); default limits are $2 per run and $5 per task, which you can change
+
+Includes @duckduckgo/autoconsent v16.43.1 (MPL-2.0), source: https://github.com/duckduckgo/autoconsent

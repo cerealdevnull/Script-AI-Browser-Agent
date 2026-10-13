@@ -30,4 +30,38 @@ class ConsentTest {
         assertFalse("/accepted" in site.requested)
         assertTrue(host.logs.any { it == "INFO Rejected cookies (onetrust)" }, host.logs.joinToString("\n"))
     }
+
+    @Test
+    fun `the model is told to reject a banner that is left, never accept all`() {
+        val model = run("index.html")
+        assertTrue(
+            "If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all." in model.requests.first().system,
+        )
+    }
+
+    @Test
+    fun `a banner that can only be accepted is left alone`() {
+        val first = run("consent-accept-only.html").requests.first().lastText
+
+        assertTrue("Accept all cookies" in first, "the model still sees the banner:\n$first")
+        assertFalse("/accepted" in site.requested)
+        assertFalse(host.logs.any { "Rejected cookies" in it })
+    }
+
+    @Test
+    fun `a page without a banner adds no wait`() {
+        runBlocking {
+            val browser = Browser.launch(tempProfiles())
+            try {
+                browser.navigate(site.url()) // warm up
+                val start = System.nanoTime()
+                browser.navigate(site.url("product.html"))
+                val ms = (System.nanoTime() - start) / 1_000_000
+                // navigate's own fixed waits are 600 ms; autoconsent's search for a banner runs ~10 s on such a page.
+                assertTrue(ms < 1_500, "took $ms ms")
+            } finally {
+                browser.close()
+            }
+        }
+    }
 }

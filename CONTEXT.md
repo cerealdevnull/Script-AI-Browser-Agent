@@ -1,22 +1,42 @@
 # AI browser agent — glossary
 
-- **goal run**: one `execute()` that tries to reach the goal.
+- **target**: one start URL a task watches. A task has one or more targets on the same site; they share one goal and one learned flow.
+- **goal run**: one attempt to reach the goal on one target.
 - **repeat run**: a goal run that comes back on a later `Loop` iteration or after a restart.
 - **run mode**: Once (reach the goal, notify the result) or Repeat (monitor until the goal's condition holds).
+- **question goal**: a goal that asks for an answer ("tell me whether …"); suits Once. In Repeat it is read as the condition its worth-notifying answer states.
+- **condition goal**: a goal that states something that can become true ("notify me when … is in stock"); suits Repeat, which learns it as a Check.
+- **check** (lowercase, user-facing): one repeat run as the user sees it ("checked 14:32", "42 checks"). _Avoid_ calling the **Check** condition a "Check" in user text; describe it in words.
+- **escalation**: a goal run on the cheaper first-try model that failed or hit the step cap, restarted as a fresh goal run on the main model.
 - **step**: one LLM call. Replayed actions are not steps.
+- **current tab**: the tab the agent sees and acts in; it moves to a tab the agent's own action opened and back to the opener when that tab closes.
+- **frame**: an iframe on the page's own site whose content is part of the snapshot; any other iframe shows only as a labelled placeholder.
 - **snapshot**: the page as an accessibility tree sent to the model, inside a `<page_content>` block.
+- **open popup**: the list or menu an expanded element controls, or an open dialog; the snapshot shows it before the rest of the page.
 - **ref**: `[n]`, the handle of an interactive element in the latest snapshot; older refs are invalid.
 - **text ref**: `[tN]`, a read-only ref on static text, a cell or a heading; only `finish` accepts it.
 - **replay cache**: the steps, Check and Readouts a learned run recorded, replayed later without the LLM.
 - **miss**: replay can't continue (no unique fingerprint match, URL off pattern, Check/Readout target not found).
-- **heal**: the LLM resuming mid-run after a miss and rewriting the cache tail.
+- **heal**: the LLM resuming mid-run after a miss and rewriting the cache tail. Users see it as "Recovering"; "heal" and "miss" are never shown to users.
 - **Check**: a true/false condition on one element that replay evaluates without the LLM.
 - **numeric Check**: a Check that compares the one number in an element's text with a threshold (below, atMost, above, atLeast); zero or several numbers is a miss.
+- **change Check**: a Repeat-only Check (changed, decreased) that holds when an element's value moved away from its baseline; when it holds the user is told `old → new` and the monitor keeps running.
+- **baseline**: the value a change Check compares against: the element's text when the Check was learned, then the value of each notified change. A heal keeps it; re-learning resets it.
 - **Readout**: a labelled element whose text is reported verbatim.
+- **result message**: what a notification says about a goal run or confirmation: kind, headline, action line, summary, Readouts, cost line, page link. Each channel lays it out its own way.
 - **irreversible step**: an action that buys, pays, deletes, sends or similar; it needs a confirmation.
 - **confirmation**: the Confirm/Decline dialog shown before an irreversible step.
+- **remote approval**: answering a confirmation from Telegram instead of the desktop dialog; the first valid answer wins. It is still a confirmation.
+- **handoff**: the agent pauses so the user can clear a CAPTCHA, bot wall or verification code in its Chrome, then resumes; unlike a confirmation, the user acts in the browser, not in a dialog.
 - **consent reject**: the script declining a cookie consent banner itself, before the model sees the page; it is never a step.
+- **consent banner**: a cookie-consent dialog or wall. The script rejects known ones itself, which costs no step and records nothing; the model rejects the rest.
 - **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
+- **browser profile**: the task's own Chrome data (cookies, sign-ins); tied to the task and its secret values, so another account gets a clean one.
+- **reset**: the user's one-shot request, made when the task starts, to forget learned steps (the replay cache), or learned steps and sign-ins (the browser profile).
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
 - **run cap** / **task cap**: the step and dollar limits per goal run / per task.
+- **task total**: the dollars all goal runs of a task have cost since the task last started; counted against the task cap.
+- **provider**: who runs the model the agent calls: a named preset (Anthropic, Google Gemini, OpenAI, OpenRouter) or Custom (any OpenAI-compatible server).
+- **recommended model**: the model a preset uses when the user leaves Model empty; Custom has none.
+- **pre-flight check**: the free lookup of the key and model at the provider, once per task start, before Chrome opens.

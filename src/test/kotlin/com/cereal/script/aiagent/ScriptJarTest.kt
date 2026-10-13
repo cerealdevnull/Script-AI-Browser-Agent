@@ -93,8 +93,10 @@ class ScriptJarTest {
                     }
                 }
 
-                assertEquals(2, api.requestCount)
-                assertEquals("Goal met\nCost: $0", host.notifications.single().message)
+                assertEquals(3, api.requestCount)
+                val (watching, met) = host.notifications.map { it.message }
+                assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
+                assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
             }
         }
     }
@@ -102,6 +104,8 @@ class ScriptJarTest {
     /** Clicks the product link, then finishes "not met" with a Check on the stock text. */
     private class FakeChatCompletions : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
+            // The pre-flight's GET /models: a server without one is skipped.
+            if (request.method == "GET") return MockResponse.Builder().code(404).build()
             val body = request.body!!.utf8()
             val ref = Regex("""\[(\d+)] link \\"Long Nose Pliers\\"""").find(body)?.groupValues?.get(1)
             val stock = Regex("""\[(t\d+)] StaticText \\"Out of stock\\"""").find(body)?.groupValues?.get(1)

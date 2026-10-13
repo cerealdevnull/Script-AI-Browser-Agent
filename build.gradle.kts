@@ -153,5 +153,6 @@ tasks.register<Test>("scriptJarTest") {
     systemProperty("scriptJar", layout.buildDirectory.file("cereal/release.jar").get().asFile.absolutePath)
     // The script keeps its Chrome profiles under user.home; keep them out of the real home.
     systemProperty("user.home", layout.buildDirectory.dir("tmp/scriptJarTest-home").get().asFile.absolutePath)
+    systemProperty("aiagent.headless", findProperty("headless") ?: "false")
     useJUnitPlatform { includeTags("scriptJar") }
 }

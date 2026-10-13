@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.math.BigDecimal
 import java.net.URI
 import java.security.MessageDigest
 
@@ -36,19 +37,33 @@ class ReplayCache(val steps: List<Step>, val check: Check? = null, val readouts:
 @Serializable
 class Step(val action: String, val fingerprint: String?, val args: JsonObject, val irreversible: Boolean, val urlPattern: String)
 
-/** A true/false condition on one element, evaluated without the model. */
+/** A true/false condition on one element, evaluated without the model. [decimal]: `","` or `"."` for a numeric Check, else null. */
 @Serializable
-class Check(val fingerprint: String, val condition: String, val expected: String? = null) {
+class Check(val fingerprint: String, val condition: String, val expected: String? = null, val decimal: String? = null) {
     /** True/false on the live page; null when the target has no unique match (a miss, not "not yet"). */
     suspend fun evaluate(browser: Browser): Boolean? {
         val matches = browser.matches(Fingerprint(fingerprint))
         if (condition == "exists") return if (matches.size > 1) null else matches.size == 1
-        val match = matches.singleOrNull() ?: return null
+        return holds(matches.singleOrNull() ?: return null)
+    }
+
+    /** True/false for [match]; null (a miss) when a numeric Check finds no single number, or for an unknown condition (a newer release's cache). */
+    fun holds(match: Match): Boolean? {
         val expected = expected.orEmpty().replace(WHITESPACE, " ").trim()
+        if (condition in NUMERIC) {
+            val c = (number(match.text, decimal ?: return null) ?: return null).compareTo(expected.toBigDecimalOrNull() ?: return null)
+            return when (condition) {
+                "below" -> c < 0
+                "atMost" -> c <= 0
+                "above" -> c > 0
+                else -> c >= 0
+            }
+        }
         return when (condition) {
             "textContains" -> expected in match.text
             "textAbsent" -> expected !in match.text
-            else -> match.enabled
+            "enabled" -> match.enabled
+            else -> null
         }
     }
 
@@ -62,12 +77,28 @@ class Check(val fingerprint: String, val condition: String, val expected: String
             "textContains" -> "$where shows “$expected”"
             "textAbsent" -> "$where no longer shows “$expected”"
             "enabled" -> "the $tag at $where is enabled"
+            "below" -> "$where is below $expected"
+            "atMost" -> "$where is at most $expected"
+            "above" -> "$where is above $expected"
+            "atLeast" -> "$where is at least $expected"
             else -> "the $tag at $where appears"
         }
     }
 
     companion object {
-        val CONDITIONS = setOf("textContains", "textAbsent", "enabled", "exists")
+        val NUMERIC = setOf("below", "atMost", "above", "atLeast")
+        val CONDITIONS = setOf("textContains", "textAbsent", "enabled", "exists") + NUMERIC
+
+        /** Every number in [text] with [decimal] (`,` or `.`) as separator; grouping marks only between groups of exactly 3 digits. */
+        fun numbers(text: String, decimal: String): List<BigDecimal> {
+            val group = Regex("[${if (decimal == ",") "." else ","}   ']")
+            val number = Regex("""(?<!\d)(?:\d{1,3}(?:$group\d{3})+|\d+)(?:${Regex.escape(decimal)}\d+)?(?!\d)""")
+            return number.findAll(text).map { BigDecimal(it.value.replace(group, "").replace(decimal, ".")) }.toList()
+        }
+
+        /** The one number in [text]; null for 0 or 2+ numbers. */
+        fun number(text: String, decimal: String): BigDecimal? = numbers(text, decimal).singleOrNull()
+
         private val WHITESPACE = Regex("\\s+")
     }
 }

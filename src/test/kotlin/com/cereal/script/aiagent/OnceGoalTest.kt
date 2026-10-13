@@ -52,6 +52,29 @@ class OnceGoalTest {
     }
 
     @Test
+    fun `when finish retries run out after a rejected flip to true, the run ends with the earlier not met`() {
+        var ref = 0
+        val exists = { r: ModelRequest ->
+            if (ref == 0) ref = r.ref("link", "Long Nose Pliers")
+            """{"ref": "$ref", "condition": "exists", "expected": null}"""
+        }
+        val flip = { r: ModelRequest -> listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock.", "check": ${exists(r)}}""")) }
+        val model =
+            ScriptedModel(
+                // The Check holds now, so this not-met finish is rejected; the model then answers met instead.
+                { listOf(call("finish", """{"goal_met": false, "summary": "Long Nose Pliers is out of stock.", "check": ${exists(it)}}""")) },
+                flip,
+                flip,
+            )
+
+        val result = run(model)
+
+        assertIs<ExecutionResult.Success>(result)
+        assertEquals("Long Nose Pliers is out of stock.", result.message)
+        assertTrue(host.notifications.none { "in stock." in it.message }, host.notifications.joinToString { it.message })
+    }
+
+    @Test
     fun `the Once prompt asks for a one-sentence answer first`() {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) })
         run(model)

@@ -193,7 +193,7 @@ internal class AgentScript(
                     else -> ""
                 }
         }
-        val outcome =
+        val ran =
             try {
                 // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise it learns.
                 cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
@@ -215,6 +215,10 @@ internal class AgentScript(
                 taskUnpriced += agent.unpricedModels
                 checks++
             }
+        // Repeat: "Goal met" only ever comes from a verified Check; an unverified one is not met and loops quietly.
+        val unverifiedMet = repeat && ran is Outcome.Finished && ran.goalMet && !ran.verified
+        if (unverifiedMet) log.warn(scrubber.forLog("goal_met true was not verified by a Check: treated as not met"))
+        val outcome = if (unverifiedMet) Outcome.Finished(false, ran.summary, ran.steps, ran.readouts, verified = false) else ran
         // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
         // ponytail: splits at the first ". " so "e.g. " cuts early; ask the model for a separate answer field if that bites.
         val answer =
@@ -248,7 +252,7 @@ internal class AgentScript(
         )
         // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
         // A heal is a failed heal: the learned steps no longer fit; a learned run asks for a reworded goal.
-        if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed)) {
+        if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed) && !unverifiedMet) {
             return report.error(NOTHING_TO_WATCH, if (agent.healed) FORGET_STEPS else REWORD, cost = cost())
         }
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.

@@ -134,6 +134,7 @@ class Agent(
     /** Models that answered a step with no known price; [cost] counts only the priced steps. */
     val unpricedModels: Set<String?> get() = unpriced
     private var finishRejections = 0
+    private var earlierFalse: String? = null // the summary of a rejected finish that said goal_met false
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
     private val recorded = mutableListOf<Step>()
@@ -232,13 +233,17 @@ class Agent(
                     "finish" -> {
                         val goalMet = call.args.bool("goal_met")
                         val (readouts, errors) = readouts(call.args["readouts"])
-                        val (check, checkError) = check(call.args["check"], goalMet)
+                        // A rejected false never turns true: the model must fix the Check, not its answer.
+                        val flipped = goalMet && earlierFalse != null
+                        val (check, checkError) = if (flipped) null to FLIPPED else check(call.args["check"], goalMet)
                         checkError?.let { errors += it }
                         if (errors.isEmpty() || finishRejections >= MAX_FINISH_RETRIES) {
                             errors.forEach { log("Not verified after $MAX_FINISH_RETRIES retries, nothing cached: $it") }
+                            if (flipped) return Outcome.Finished(false, earlierFalse!!, steps, readouts, verified = false, recorded = recorded.toList())
                             val verified = errors.isEmpty()
                             return Outcome.Finished(goalMet, call.args.str("summary"), steps, readouts, verified, check.takeIf { verified }, recorded.toList())
                         }
+                        if (!goalMet) earlierFalse = call.args.str("summary")
                         finishRejections++
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
                         continue
@@ -438,7 +443,11 @@ class Agent(
             when (check.evaluate(browser)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
-                else -> null to "Check: it is ${!goalMet} on the live page, but goal_met is $goalMet"
+                else ->
+                    null to
+                        "Check: it is ${!goalMet} on the live page now, but you say the goal is ${if (goalMet) "met" else "not met"}. " +
+                        "A check must be true exactly when the goal is met: pick a condition or element that is $goalMet now " +
+                        if (goalMet) "(e.g. textContains instead of textAbsent)." else "(e.g. textAbsent instead of textContains)."
             }
         } catch (e: CancellationException) {
             throw e
@@ -673,6 +682,7 @@ class Agent(
 
     companion object {
         private const val MAX_FINISH_RETRIES = 2
+        private const val FLIPPED = "goal_met was false; change the check, not goal_met. If you misread the page, call fail."
         private const val STUCK_REPEATS = 3
         private const val REPEATING =
             "error: you are repeating the same action ($STUCK_REPEATS times on this page, same target and arguments). " +

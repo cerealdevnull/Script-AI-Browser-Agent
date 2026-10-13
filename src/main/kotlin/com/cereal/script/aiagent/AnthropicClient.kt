@@ -14,9 +14,9 @@ import kotlinx.serialization.json.putJsonObject
 
 /** Anthropic Messages API over raw OkHttp (vendor SDKs don't load in the host's ScriptClassLoader). */
 class AnthropicClient(
-    private val baseUrl: String,
+    internal val baseUrl: String,
     private val apiKey: String,
-    private val model: String,
+    internal val model: String,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {
@@ -52,7 +52,7 @@ class AnthropicClient(
                 "${baseUrl.trimEnd('/')}/v1/messages",
                 mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01", "anthropic-beta" to "server-side-fallback-2026-07-01"),
                 body,
-                sleep,
+                { request.onRetry(it); sleep(it) },
             )
         val content = json["content"]?.jsonArray ?: JsonArray(emptyList())
         val blocks = content.map { it.jsonObject }
@@ -70,6 +70,14 @@ class AnthropicClient(
             text = blocks.lastOrNull { it.str("type") == "text" }?.str("text"),
         )
     }
+
+    override suspend fun check(): Preflight? =
+        try {
+            getJson("${baseUrl.trimEnd('/')}/v1/models/$model", mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01"), sleep)
+            null
+        } catch (e: ModelException) {
+            preflight(e)
+        }
 
     private fun toJson(message: Message): JsonObject =
         when (message) {

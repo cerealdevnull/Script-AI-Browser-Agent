@@ -190,8 +190,39 @@ class HealTest {
         site.pages["product.html"] = "<html><body><div><h2>Pliers</h2><p>Price: \$15.00</p></div></body></html>"
         task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
-        assertEquals("Goal met\nPrice: Price: \$15.00\nFound it.\nreplayed + healed in 1 step, \$0.01", host.notifications.last().message)
+        assertEquals("Found it.\nPrice: Price: \$15.00\nCost: \$0.01 (the page changed, so it re-learned part of it)", host.notifications.last().message)
         assertTrue(host.logs.any { "replay miss: readout 'Price' does not match exactly one node" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `a replay that stops matching after a redesign and ends not met, where the learned run met it, points at Forget learned steps`() {
+        val price: suspend (ModelRequest) -> List<ToolCall> = {
+            val text = Regex("""\[t\d+] StaticText "(Price: [^"]+)"""").find(it.lastText)!!.groupValues[1]
+            val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", text)}", "value": "$text"}"""
+            listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": [$readout], "check": null}"""))
+        }
+        val notFound: suspend (ModelRequest) -> List<ToolCall> = {
+            listOf(call("finish", """{"goal_met": false, "summary": "Couldn't find the pliers.", "readouts": null, "check": null}"""))
+        }
+        val model = ScriptedModel(click("Tools"), click("Long Nose Pliers"), price, notFound)
+
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        site.pages["tools.html"] = """<html><body><h1>Tools</h1><p>New look!</p></body></html>"""
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+
+        assertEquals(
+            "Couldn't find the pliers.\nPick “Forget learned steps” in On next start, then start the task again.\n" +
+                "Cost: \$0.01 (the page changed, so it re-learned part of it)",
+            host.notifications.last().message,
+        )
+    }
+
+    @Test
+    fun `a replay that ends not met where the learned run was not met suggests no reset`() {
+        val model = learning()
+        task(model) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        assertFalse(host.notifications.any { "Forget" in it.message }, host.notifications.joinToString { it.message })
     }
 
     @Test
@@ -292,12 +323,12 @@ class HealTest {
         task(healing, config(maxSteps = 1)) { execute ->
             val stopped = execute()
             assertIs<ExecutionResult.Error>(stopped)
-            assertEquals("Step/cost limit reached: max steps per run (1)", stopped.message)
+            assertEquals("Stopped after 1 step, the Max steps per run limit.", stopped.message)
         }
 
         assertEquals(1, healing.requests.size)
         assertEquals(learned, cacheSteps())
-        assertEquals("Stopped: Step/cost limit reached: max steps per run (1)\nreplayed + healed in 1 step, \$0.01", host.notifications.last().message)
+        assertTrue(host.notifications.last().message.startsWith("Stopped after 1 step, the Max steps per run limit.\n"))
     }
 
     private companion object {

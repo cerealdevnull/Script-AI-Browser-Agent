@@ -44,20 +44,56 @@ sealed interface Outcome {
     ) : Outcome
 
     /**
-     * [transient]: a page load, network or model 429/5xx failure that outlasted its retries; a later attempt may work.
-     * Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
+     * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
+     * a page load, network or model 429/5xx failure couldn't reach after its retries ([transient]: a later attempt may
+     * work; [startPage]: it was the start URL, so no step ran). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
      */
-    class Failed(val reason: String, override val steps: Int, val transient: Boolean = false) : Outcome
+    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null, val startPage: Boolean = false) : Outcome {
+        val transient get() = unreachable != null
+    }
 
     /** A step or cost cap was hit. */
-    class Stopped(val reason: String, override val steps: Int) : Outcome
+    class Stopped(val reason: String, override val steps: Int, val action: String) : Outcome
 
-    /** The user declined (or closed) a confirmation. */
-    class Declined(override val steps: Int) : Outcome
+    /** The user declined (or closed) the confirmation of [step]. */
+    class Declined(val step: Confirmation, override val steps: Int) : Outcome
 }
 
-/** An irreversible step waiting for the user's yes: [element] is the target's `role "name"`, [reason] the model's. */
-class Confirmation(val action: String, val element: String, val url: String, val reason: String?)
+/**
+ * An irreversible step waiting for the user's yes: [element] is the target's `role "name"`, [reason] the model's,
+ * [text] what a `type` sends.
+ */
+class Confirmation(val action: String, val element: String, val url: String, val reason: String?, val text: String? = null) {
+    /** The element's label: the `name` of `role "name"`. */
+    val label get() = element.substringAfter('"').removeSuffix("\"")
+
+    /** What the step does, in plain words: "Place this order". */
+    val verb
+        get() =
+            if (action == "type") {
+                "Send this text"
+            } else {
+                VERBS.entries.firstOrNull { (k, _) -> Regex("\\b$k\\b").containsMatchIn(label.lowercase()) }?.value ?: "Press “$label”"
+            }
+
+    /** The dialog headline and notification: "Place this order on amazon.com?". */
+    val question get() = "$verb on $site?"
+
+    /** The headline when the user says No: a normal finish. */
+    val declined get() = "Stopped: you declined to ${verb.replaceFirstChar(Char::lowercase)} on $site. Nothing was done."
+
+    private val site get() = hostOf(url)?.let(::registrableDomain) ?: url
+
+    private companion object {
+        // ponytail: English keywords only (Irreversible also knows Dutch, which falls back to "Press “…”").
+        val VERBS =
+            linkedMapOf(
+                "cancel subscription" to "Cancel this subscription", "delete" to "Delete this", "order" to "Place this order",
+                "place" to "Place this order", "buy" to "Buy this", "pay" to "Make this payment", "send" to "Send this",
+                "submit" to "Submit this", "confirm" to "Confirm this",
+            )
+    }
+}
 
 /** [taskSpent]: what earlier runs of this task cost, counted against [maxTaskCost]. */
 class Caps(val maxSteps: Int, val maxRunCost: Double, val maxTaskCost: Double, val taskSpent: Double = 0.0)
@@ -80,6 +116,10 @@ class Agent(
     private val runMode: RunMode = RunMode.Once,
     /** The task's one-line status in the Cereal UI: what the agent is doing right now. */
     private val status: suspend (String) -> Unit = {},
+    /** Who serves the model, as user text names it: "Anthropic", "your server". */
+    private val providerName: String = "the model provider",
+    /** The configured model has a price; false shows `$?` from the first status line. */
+    private val modelPriced: Boolean = true,
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val messages = mutableListOf<Message>()
@@ -90,6 +130,9 @@ class Agent(
     /** Dollars spent by this run so far. */
     var cost = 0.0
         private set
+
+    /** Models that answered a step with no known price; [cost] counts only the priced steps. */
+    val unpricedModels: Set<String?> get() = unpriced
     private var finishRejections = 0
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
@@ -100,6 +143,10 @@ class Agent(
     var healed = false
         private set
 
+    /** The start page didn't load: nothing to show the model, so the run ends before step 1. */
+    private fun startFailed(e: PageLoadException) =
+        Outcome.Failed("Couldn't open $startUrl (${e.reason}). Check the Start URL.", 0, unreachable = hostOf(startUrl) ?: startUrl, startPage = true)
+
     /** True when the replay missed because the cached Check's target is gone: that Check must not be cached again. */
     var checkMissed = false
         private set
@@ -109,15 +156,14 @@ class Agent(
         val current =
             try {
                 if (resume == null) {
-                    status("Opening $startUrl")
+                    status("Opening ${hostOf(startUrl) ?: startUrl}")
                     log("opening $startUrl")
                     browser.navigate(startUrl)
                 }
                 lastUrl = browser.url()
                 "Current page:"
             } catch (e: PageLoadException) {
-                loadFailure = "navigate" + JsonObject(mapOf("url" to JsonPrimitive(startUrl)))
-                "Current page (error: ${e.message}):"
+                return startFailed(e)
             }
         messages +=
             Message.User(
@@ -127,14 +173,22 @@ class Agent(
                 ),
             )
         while (true) {
-            capReached()?.let { return Outcome.Stopped("Step/cost limit reached: $it", steps) }
-            status("Step ${steps + 1}: deciding the next action")
+            capReached()?.let { return it }
+            status("${progress(steps + 1)} · Thinking…")
             // Retries and rate-limit waits happen inside send(): they are not steps.
+            val onRetry: suspend (Long) -> Unit = { status("${progress(steps + 1)} · ${providerName.cap()} is busy, retrying in ${(it + 999) / 1000} s") }
             val turn =
                 try {
-                    model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList()))
+                    model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList(), onRetry))
                 } catch (e: ModelException) {
-                    return Outcome.Failed(e.message!!, steps, e.transient)
+                    warn("step ${steps + 1}: the model call failed: ${e.message}")
+                    // ponytail: the cause is parsed from the message; give ModelException fields if more wording needs it.
+                    val message = e.message!!
+                    // A rejected key arrives already worded by the pre-flight (#58).
+                    if (e.status == 401 || e.status == 403) return Outcome.Failed(message, steps)
+                    if (!e.transient) return Outcome.Failed("${providerName.cap()} returned an error: ${sentence(message.substringAfter(": "))}", steps, "Start the task again.")
+                    val cause = HTTP_STATUS.find(message)?.value ?: "network error"
+                    return Outcome.Failed("Couldn't reach $providerName ($cause).", steps, "Try again later.", unreachable = providerName)
                 }
             steps++
             messages += Message.Assistant(turn)
@@ -150,8 +204,14 @@ class Agent(
                 "step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} " +
                     "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
             )
-            if (turn.stopReason == "refusal") return Outcome.Failed("Model refused: ${turn.text ?: "no reason given"}", steps)
-            if (turn.toolCalls.isEmpty()) return Outcome.Failed("the model stopped without calling finish (${turn.stopReason})", steps)
+            if (turn.stopReason == "refusal") {
+                val why = sentence(turn.text?.takeIf { it.isNotBlank() } ?: "no reason given")
+                return Outcome.Failed("${providerName.cap()}'s model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
+            }
+            if (turn.toolCalls.isEmpty()) {
+                warn("step $steps: the model stopped without calling finish (stop reason: ${turn.stopReason})")
+                return Outcome.Failed("The model stopped without an answer.", steps, "Start the task again.")
+            }
 
             val results = mutableListOf<ToolResult>()
             // The refs the model saw; an earlier call in this turn may have taken a snapshot that renumbered them.
@@ -183,11 +243,20 @@ class Agent(
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
                         continue
                     }
-                    "fail" -> return Outcome.Failed(call.args.str("reason"), steps)
+                    "fail" -> return Outcome.Failed("The agent gave up: ${sentence(call.args.str("reason").trim().take(300))}", steps)
                 }
-                status("Step $steps: ${actions[i]}")
+                status("${progress(steps)} · ${activity(call)}")
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
-                if (seen >= 2 * STUCK_REPEATS) return Outcome.Failed("stuck: repeating the same action", steps)
+                if (seen >= 2 * STUCK_REPEATS) {
+                    val page = runCatching { browser.url() }.getOrNull() ?: lastUrl ?: startUrl
+                    // Stuck signing in: a stale or wrong-account sign-in is likely, so point at the reset that signs out.
+                    val signIn = SIGN_IN_PAGE.containsMatchIn("${runCatching { URI(page).path }.getOrNull().orEmpty()} ${runCatching { browser.title() }.getOrNull().orEmpty()}".lowercase())
+                    return Outcome.Failed(
+                        "The agent got stuck repeating the same action on $page.",
+                        steps,
+                        if (signIn) FORGET_AND_SIGN_OUT else "Make the goal more specific, then start the task again.",
+                    )
+                }
                 val target =
                     (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let {
                         try {
@@ -207,10 +276,10 @@ class Agent(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: DeclinedException) {
-                        return Outcome.Declined(steps)
+                        return Outcome.Declined(e.step, steps)
                     } catch (e: PageLoadException) {
                         val key = call.name + call.args
-                        if (key == loadFailure) return Outcome.Failed("Page load failed: ${e.message}", steps, transient = true)
+                        if (key == loadFailure) return loadFailed(e, (call.args["url"] as? JsonPrimitive)?.contentOrNull, steps)
                         loadFailure = key
                         ToolResult(call.id, "error: ${e.message}", isError = true)
                     } catch (e: Exception) {
@@ -223,13 +292,56 @@ class Agent(
         }
     }
 
-    private fun capReached(): String? =
+    /** The status line's prefix: progress and cost first, because the host cuts the line from the right. */
+    private fun progress(step: Int) = (if (healed) "Recovering · " else "") + "Step $step of ${caps.maxSteps} · ${spent()}"
+
+    /** `$0.12`; `$?` when no step had a price; `$0.12 + unknown` when only some did. */
+    private fun spent() =
         when {
-            steps >= caps.maxSteps -> "max steps per run (${caps.maxSteps})"
-            cost >= caps.maxRunCost -> "max \$ per run (${usd(caps.maxRunCost)})"
-            caps.taskSpent + cost >= caps.maxTaskCost -> "max \$ per task (${usd(caps.maxTaskCost)})"
+            unpriced.isEmpty() && modelPriced -> usd(cost)
+            cost == 0.0 -> "\$?"
+            else -> "${usd(cost)} + unknown"
+        }
+
+    /** What a step does, in plain words for the status line: `Clicking "Pliers"`. Never a tool name or a secret value. */
+    private fun activity(call: ToolCall): String {
+        val target =
+            (call.args["ref"] as? JsonPrimitive)?.intOrNull?.let { ref ->
+                runCatching { browser.describe(ref) }.getOrNull()?.let { if ('"' in it) "\"" + it.substringAfter('"') else "the $it" }
+            } ?: "the page"
+        return when (call.name) {
+            "click" -> "Clicking $target"
+            "type" -> "Typing \"${call.args.str("text")}\" into $target"
+            "select" -> "Choosing \"${call.args.str("option")}\" in $target"
+            "type_secret" -> "Filling in your ${call.args.str("field").replace('_', ' ')} in $target"
+            "navigate" -> call.args.str("url").let { url -> "Going to " + (runCatching { URI(url).let { it.host + it.path } }.getOrNull() ?: url) }
+            "scroll" -> "Scrolling ${call.args.str("direction")}"
+            "wait" -> "Waiting ${call.args.int("seconds")} s"
+            "go_back" -> "Going back"
+            "screenshot" -> "Looking at the page"
+            else -> "Reading the page"
+        }
+    }
+
+    private fun capReached(): Outcome.Stopped? =
+        when {
+            steps >= caps.maxSteps ->
+                Outcome.Stopped(
+                    "Stopped after ${stepCount(caps.maxSteps)}, the Max steps per run limit.",
+                    steps,
+                    "If the agent was making progress, raise Max steps per run. Otherwise make the goal more specific.",
+                )
+            cost >= caps.maxRunCost -> Outcome.Stopped("Stopped at ${usd(caps.maxRunCost)}, the Max \$ per run limit.", steps, "Raise Max \$ per run to let it go further.")
+            caps.taskSpent + cost >= caps.maxTaskCost ->
+                Outcome.Stopped("This task has spent ${usd(caps.maxTaskCost)}, its Max \$ per task limit.", steps, "Raise Max \$ per task to keep it running.")
             else -> null
         }
+
+    /** [url]: the page asked for, when known; else the one that timed out, or the last one loaded. */
+    private suspend fun loadFailed(e: PageLoadException, url: String?, steps: Int): Outcome.Failed {
+        val page = url ?: e.url ?: lastUrl ?: startUrl
+        return Outcome.Failed("Couldn't load $page (${e.reason}).", steps, "The site may be down. Try again later.", unreachable = hostOf(page) ?: page)
+    }
 
     /** True when [call] uses refs of a kind an earlier action in this step renumbered; [seen]: the ref versions the model saw. */
     private fun staleRefs(call: ToolCall, seen: Pair<Int, Int>): Boolean {
@@ -368,21 +480,29 @@ class Agent(
         var at = "the start page"
         var failed = at
         var done = emptyList<Step>()
+        var place = "the start"
         val miss =
             try {
-                browser.navigate(startUrl)
+                status("Opening ${hostOf(startUrl) ?: startUrl}")
+                try {
+                    browser.navigate(startUrl)
+                } catch (e: PageLoadException) {
+                    return startFailed(e)
+                }
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
                     failed = "step ${i + 1} of ${cache.steps.size} (${describe(step)})"
-                    status("Replaying $failed")
+                    place = "step ${i + 1}"
                     log("replaying $failed")
                     done = cache.steps.take(i)
                     val ref = step.fingerprint?.let { browser.refFor(it) ?: throw Miss("$at: no unique match for its target", "$failed: no unique match for its target") }
                     var args = step.args + ("irreversible" to JsonPrimitive(step.irreversible))
                     if (ref != null) args = args + ("ref" to JsonPrimitive(ref))
                     if (step.action == "type_secret") args = mapOf("ref" to JsonPrimitive(ref), "field" to JsonPrimitive(step.args.str("text").removeSurrounding("{{secret:", "}}")))
-                    act(ToolCall("replay", step.action, JsonObject(args)))
+                    val call = ToolCall("replay", step.action, JsonObject(args))
+                    status("Replaying ${i + 1} of ${cache.steps.size} · \$0 · ${activity(call)}")
+                    act(call)
                     val url = urlPattern(browser.url())
                     if (url != step.urlPattern) {
                         // The step ran, so it stays done, recorded with the page it really led to.
@@ -393,6 +513,7 @@ class Agent(
                 done = cache.steps
                 logNewUrl()
                 status("Replay: checking the result")
+                place = "the result check"
                 at = "the check"
                 failed = at
                 val goalMet =
@@ -401,7 +522,7 @@ class Agent(
                             checkMissed = true
                             throw Miss("the check's target does not match exactly one node", "the check's target is gone")
                         }
-                    } ?: true
+                    } ?: cache.met ?: true // no Check: the learned run's own verdict
                 val readouts =
                     cache.readouts.map { r ->
                         at = "readout '${r.label}'"
@@ -417,15 +538,15 @@ class Agent(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: DeclinedException) {
-                return Outcome.Declined(0)
+                return Outcome.Declined(e.step, 0)
             } catch (e: PageLoadException) {
-                return Outcome.Failed("Page load failed: ${e.message}", 0, transient = true)
+                return loadFailed(e, null, 0)
             } catch (e: Exception) {
                 Miss("$at: ${e.message}", "$failed: ${e.message}")
             }
         // Healing runs outside the try: an error in the healing run is not another miss.
         log("replay miss: ${miss.rule}")
-        status("Replay missed: the model takes over")
+        status("The saved steps stopped matching at $place. The agent takes over.")
         healed = true
         recorded += done
         // Step targets are page text: they reach the model only inside <page_content>.
@@ -519,10 +640,11 @@ class Agent(
             if (irreversible.signInSubmit(call.name, ref, text)) return log("model flag cleared: sign-in submit")
         }
         val reason = (call.args["reason"] as? JsonPrimitive)?.contentOrNull
-        if (!confirm(Confirmation(call.name, browser.describe(ref), browser.url(), reason))) throw DeclinedException()
+        val step = Confirmation(call.name, browser.describe(ref), browser.url(), reason, text)
+        if (!confirm(step)) throw DeclinedException(step)
     }
 
-    private class DeclinedException : Exception("declined by user")
+    private class DeclinedException(val step: Confirmation) : Exception("declined by user")
 
     /**
      * Never-do: no typing into password, email or card fields on an account-settings page. A form submitted by e.g.
@@ -584,10 +706,13 @@ class Agent(
         private const val REPEAT_MODE =
             "Run mode: Repeat. This script re-checks the page on its own schedule and notifies the user when the goal's " +
                 "condition holds; don't look for a notify or alert feature on the site. Report whether the condition holds now " +
-                "(goal_met) and give a check: the element and condition that tell whether it holds, so later re-checks need no model."
+                "(goal_met) and give a check: the element and condition that tell whether it holds, so later re-checks need no model. " +
+                "If the goal is a question, watch for the answer that makes it worth notifying, usually yes."
 
         private const val ONCE_MODE =
-            "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found."
+            "Run mode: Once. Reach the goal, then call finish with goal_met and a short summary of what you found. " +
+                "Start summary with a one-sentence answer for the user, e.g. \"Long Nose Pliers is out of stock.\", " +
+                "\"Added to cart.\" or \"Couldn't add it: size 42 is sold out.\""
 
         private const val IRREVERSIBLE_ARGS =
             " irreversible: true when this step buys, pays, orders, deletes, sends or otherwise can't be undone (the user is asked to " +
@@ -708,3 +833,10 @@ class Agent(
         private fun JsonObject.bool(key: String) = getValue(key).jsonPrimitive.boolean
     }
 }
+
+private val HTTP_STATUS = Regex("HTTP \\d+")
+
+/** Ends [s] as a sentence: adds a full stop unless it already ends in one. */
+private fun sentence(s: String) = s.trimEnd().let { if (it.endsWith('.') || it.endsWith('!') || it.endsWith('?')) it else "$it." }
+
+private fun String.cap() = replaceFirstChar(Char::uppercase)

@@ -13,10 +13,28 @@ class PricesTest {
     }
 
     @Test
+    fun `Sonnet 5_5 cache reads cost a tenth of a dollar per million`() {
+        assertEquals(0.10, Prices.cost("claude-sonnet-5-5", Usage(0, 0, 1_000_000))!!, 1e-9)
+    }
+
+    @Test
     fun `matches dated snapshots and provider-prefixed ids`() {
         assertEquals(10.0, Prices.cost("gpt-4o-2024-08-06", Usage(0, 1_000_000))!!, 1e-9)
         assertEquals(0.6, Prices.cost("gpt-4o-mini-2024-07-18", Usage(0, 1_000_000))!!, 1e-9)
         assertEquals(20.0, Prices.cost("anthropic/claude-opus-5-5", Usage(0, 1_000_000))!!, 1e-9)
+    }
+
+    @Test
+    fun `prices OpenRouter model ids, which write the Claude version with a dot`() {
+        assertEquals(10.0, Prices.cost("anthropic/claude-sonnet-5.5", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(5.0, Prices.cost("anthropic/claude-haiku-4.5", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(15.0, Prices.cost("openai/gpt-5.4", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(10.0, Prices.cost("google/gemini-2.5-pro", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(10.0, Prices.cost("anthropic/claude-sonnet-5.5-20260928", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(50.0, Prices.cost("anthropic/claude-5-fable-20260609", Usage(0, 1_000_000))!!, 1e-9)
+        assertEquals(15.0, Prices.cost("anthropic/claude-4.6-sonnet-20260217", Usage(0, 1_000_000))!!, 1e-9)
+        // Dots stay in non-Claude ids.
+        assertEquals(8.0, Prices.cost("openai/gpt-4.1", Usage(0, 1_000_000))!!, 1e-9)
     }
 
     @Test
@@ -29,16 +47,6 @@ class PricesTest {
         // The threshold counts cache reads and writes; 100K exactly stays on the short-prompt rate.
         assertEquals(0.001, Prices.cost("claude-haiku-5-5", Usage(0, 0, cacheRead = 100_000))!!, 1e-12)
         assertEquals((1_000 * 0.50 + 1_000 * 2.50 + 95_000 * 0.05 + 5_000 * 0.625) / 1e6, Prices.cost("claude-haiku-5-5", Usage(1_000, 1_000, 95_000, 5_000))!!, 1e-12)
-    }
-
-    @Test
-    fun `OpenRouter's dotted and canonical Claude ids are priced`() {
-        assertEquals(10.0, Prices.cost("anthropic/claude-sonnet-5.5", Usage(0, 1_000_000))!!, 1e-9)
-        assertEquals(10.0, Prices.cost("anthropic/claude-sonnet-5.5-20260928", Usage(0, 1_000_000))!!, 1e-9)
-        assertEquals(15.0, Prices.cost("anthropic/claude-4.6-sonnet-20260217", Usage(0, 1_000_000))!!, 1e-9)
-        assertEquals(50.0, Prices.cost("anthropic/claude-5-fable-20260609", Usage(0, 1_000_000))!!, 1e-9)
-        // Dots stay in non-Claude ids.
-        assertEquals(8.0, Prices.cost("openai/gpt-4.1", Usage(0, 1_000_000))!!, 1e-9)
     }
 
     @Test

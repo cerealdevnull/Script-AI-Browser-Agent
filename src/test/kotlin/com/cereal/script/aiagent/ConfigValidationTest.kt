@@ -25,19 +25,19 @@ class ConfigValidationTest {
     fun `missing API key`() = assertRejected(TestConfig(apiKey = null), "API key is required for Anthropic")
 
     @Test
-    fun `secret names must be unique`() =
+    fun `secret labels must be unique, ignoring case and spaces around them`() =
         assertRejected(
-            TestConfig(secrets = listOf("email" to Secret("a"), "email" to Secret("b"))),
-            "Secret names must be unique: email",
+            TestConfig(secrets = listOf("Email" to Secret("a"), " email " to Secret("b"))),
+            "The label 'email' is already used by another secret",
         )
 
     @Test
-    fun `secret names must be lowercase identifiers`() =
-        assertRejected(TestConfig(secrets = listOf("E-mail" to Secret("a"))), "Secret 1 name must match [a-z][a-z0-9_]*")
+    fun `a secret value needs a label`() =
+        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Give this value a label, e.g. password")
 
     @Test
-    fun `a secret value needs a name`() =
-        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Secret 2 has a value but no name")
+    fun `a secret label needs a value`() =
+        assertRejected(TestConfig(secrets = listOf("Email" to null)), "Enter the value for 'Email'")
 
     @Test
     fun `step cap must be positive`() = assertRejected(TestConfig(maxSteps = 0), "Max steps per run must be > 0")
@@ -49,11 +49,35 @@ class ConfigValidationTest {
     fun `task cost cap must be positive`() = assertRejected(TestConfig(maxTaskCost = -1.0), "Max $ per task must be > 0")
 
     @Test
-    fun `repeat interval must be positive`() = assertRejected(TestConfig(repeatInterval = 0), "Repeat interval must be > 0")
+    fun `repeat interval must be positive`() = assertRejected(TestConfig(runMode = RunMode.Repeat, repeatInterval = 0), "Check every must be > 0")
+
+    @Test
+    fun `a Once task ignores the hidden Check every`() = assertRejected(TestConfig(apiKey = null, repeatInterval = 0), "API key is required for Anthropic")
+
+    @Test
+    fun `a hidden secret slot is not validated`() =
+        assertRejected(TestConfig(apiKey = null, secrets = listOf(null to null, null to Secret("b"))), "API key is required for Anthropic")
+
+    @Test
+    fun `an old saved task lists every problem in one notification`() =
+        runBlocking {
+            val host = Host()
+            val model = ScriptedModel()
+
+            val result = host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(apiKey = null, runMode = RunMode.Repeat, repeatInterval = 0))
+
+            val expected = "Fix these in the task settings: API key is required for Anthropic. Check every must be > 0."
+            assertIs<ExecutionResult.Error>(result)
+            assertEquals(expected, result.message)
+            assertEquals(expected, host.statuses.last())
+            assertTrue(host.notifications.single().message.startsWith("$expected\n"))
+            assertTrue(model.requests.isEmpty())
+        }
 
     /** An invalid config ends with Error and a notification, and makes no model call. */
-    private fun assertRejected(config: TestConfig, reason: String) =
+    private fun assertRejected(config: TestConfig, error: String) =
         runBlocking {
+            val reason = "Fix these in the task settings: $error."
             val host = Host()
             val model = ScriptedModel()
 
@@ -62,7 +86,7 @@ class ConfigValidationTest {
             assertIs<ExecutionResult.Error>(result)
             assertEquals(reason, result.message)
             val notification = host.notifications.single()
-            assertTrue(notification.message.startsWith("Failed: $reason"), notification.message)
+            assertTrue(notification.message.startsWith("$reason\n"), notification.message)
             assertTrue(model.requests.isEmpty())
         }
 }

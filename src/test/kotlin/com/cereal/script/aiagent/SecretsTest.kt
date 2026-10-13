@@ -61,6 +61,34 @@ class SecretsTest {
     }
 
     @Test
+    fun `a label is a free word the agent knows by its lowercase name`() {
+        val model =
+            ScriptedModel(
+                {
+                    assertTrue("type_secret (by name): email, my_password" in it.lastText, it.lastText)
+                    listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}"""))
+                },
+                {
+                    assertTrue("{{secret:email}}" in it.lastText, it.lastText)
+                    listOf(call("fail", """{"reason": "x"}"""))
+                },
+            )
+
+        runBlocking {
+            host.run(
+                AiAgentScript({ model }, tempProfiles()),
+                TestConfig(
+                    goal = "Log in with my email",
+                    startUrl = site.url("login.html"),
+                    secrets = listOf(" Email " to Secret(EMAIL), "My Password" to Secret(PASSWORD)),
+                ),
+            )
+        }
+
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
     fun `a failure reason that carries a typed secret is scrubbed from the logs and the result`() {
         val model =
             ScriptedModel(
@@ -73,7 +101,7 @@ class SecretsTest {
         assertIs<ExecutionResult.Error>(result)
         assertFalse(EMAIL in result.message, result.message)
         assertFalse(host.logs.any { EMAIL in it }, host.logs.joinToString("\n"))
-        assertTrue(host.logs.any { "Failed: no account for {{secret:email}}" in it }, host.logs.joinToString("\n"))
+        assertTrue(host.logs.any { "no account for {{secret:email}}" in it }, host.logs.joinToString("\n"))
     }
 
     @Test

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -18,9 +19,11 @@ import kotlinx.serialization.json.putJsonObject
  * The API key is optional (local servers) and goes only to [baseUrl], in the auth header.
  */
 class OpenAiCompatibleClient(
-    private val baseUrl: String,
+    internal val baseUrl: String,
     private val apiKey: String?,
-    private val model: String,
+    internal val model: String,
+    /** A Custom server: it may serve ids its list leaves out, and gets no OpenRouter-only cache_control. */
+    private val custom: Boolean = false,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) : ModelClient {
     override suspend fun send(request: ModelRequest): ModelTurn {
@@ -48,10 +51,11 @@ class OpenAiCompatibleClient(
                         }
                     },
                 )
-                put("messages", JsonArray(toJson(request)))
+                val messages = toJson(request)
+                // OpenRouter passes Anthropic's cache_control through: one breakpoint on the system prompt, one on the newest message.
+                put("messages", JsonArray(if (claude) messages.mapIndexed { i, m -> if (i == 0 || i == messages.lastIndex) cached(m) else m } else messages))
             }
-        val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
-        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body, sleep)
+        val json = postJson("${baseUrl.trimEnd('/')}/chat/completions", headers, body) { request.onRetry(it); sleep(it) }
         val choice = json["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: throw ModelException("Model error: no choices in response")
         val message = choice["message"] as? JsonObject ?: throw ModelException("Model error: no message in response")
         val usage = json["usage"] as? JsonObject
@@ -59,7 +63,7 @@ class OpenAiCompatibleClient(
         val prompt = usage.long("prompt_tokens")
         val details = usage?.get("prompt_tokens_details") as? JsonObject
         val cached = details.long("cached_tokens")
-        val written = details.long("cache_write_tokens") // GPT-5.6+ bills these at 1.25x input
+        val written = details.long("cache_write_tokens") // OpenRouter for Claude; GPT-5.6+ bills these at 1.25x input
         // Gemini leaves thinking out of completion_tokens, so the real output is total − prompt.
         val output = maxOf(usage.long("total_tokens") - prompt, usage.long("completion_tokens"))
         return ModelTurn(
@@ -80,8 +84,46 @@ class OpenAiCompatibleClient(
         )
     }
 
+    private val headers = if (apiKey.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
+
+    /** Looks the model up in `GET /models` (Gemini lists `models/<id>`; OpenRouter adds `supported_parameters`). */
+    override suspend fun check(): Preflight? {
+        val json =
+            try {
+                getJson("${baseUrl.trimEnd('/')}/models", headers, sleep)
+            } catch (e: ModelException) {
+                // A Custom server without a models endpoint can't tell.
+                return if (e.status == 404) null else preflight(e)
+            }
+        // A list in another shape can't tell. OpenRouter serves `<id>:nitro` etc. without listing them.
+        val data = json["data"] as? JsonArray ?: return null
+        val wanted = model.removePrefix("models/") // the form accepts Gemini's own `models/<id>` too
+        val entry = data.mapNotNull { it as? JsonObject }.firstOrNull { it.str("id")?.removePrefix("models/").let { id -> id == wanted || id == wanted.substringBefore(':') } }
+        val params = entry?.get("supported_parameters") as? JsonArray
+        return when {
+            entry == null -> if (custom) null else Preflight.UnknownModel
+            params != null && params.none { (it as? JsonPrimitive)?.content == "tools" } -> Preflight.NoTools
+            else -> null
+        }
+    }
+
+    private val claude = !custom && "claude" in model.lowercase()
+
+    private fun cached(message: JsonObject): JsonObject {
+        val parts =
+            when (val content = message["content"]) {
+                is JsonNull -> return message
+                is JsonPrimitive -> listOf(buildJsonObject { put("type", "text"); put("text", content) })
+                is JsonArray -> content.map { it.jsonObject }
+                else -> return message
+            }.ifEmpty { return message }
+        val last = JsonObject(parts.last() + ("cache_control" to buildJsonObject { put("type", "ephemeral") }))
+        return JsonObject(message + ("content" to JsonArray(parts.dropLast(1) + last)))
+    }
+
     private fun toJson(request: ModelRequest): List<JsonObject> {
-        val keepWhole = request.messages.filterIsInstance<Message.ToolResults>().flatMap { it.results }.takeLast(KEEP_SNAPSHOTS).toSet()
+        // Claude keeps all of them: trimming rewrites an old message each step and so breaks the cached prefix.
+        val keepWhole = request.messages.filterIsInstance<Message.ToolResults>().flatMap { it.results }.takeLast(if (claude) Int.MAX_VALUE else KEEP_SNAPSHOTS).toSet()
         val system =
             buildJsonObject {
                 put("role", "system")

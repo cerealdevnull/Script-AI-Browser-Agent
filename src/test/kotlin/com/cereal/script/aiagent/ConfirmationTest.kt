@@ -47,12 +47,13 @@ class ConfirmationTest {
 
         val result = run(model, "checkout.html")
 
-        assertEquals("Error: declined by user", result.text)
+        assertEquals("Success: $DECLINED", result.text)
         assertEquals(1, host.dialogs.size)
         assertEquals(1, model.requests.size)
         assertFalse("/order.html" in site.requested, "the order was submitted")
-        assertEquals("Confirmation needed: click on button \"Place order\"", host.notifications.first().message)
-        assertTrue(host.notifications.last().message.startsWith("Declined by user\n"), host.notifications.last().message)
+        assertEquals("Place this order on 127.0.0.1?\nConfirmation needed: answer in the window that opened. The task waits until you answer.", host.notifications.first().message)
+        assertTrue(host.notifications.last().message.matches(Regex("${Regex.escape(DECLINED)}\nCost: \\$[0-9.]+")), host.notifications.last().message)
+        assertEquals(DECLINED, host.statuses.last())
     }
 
     @Test
@@ -70,9 +71,9 @@ class ConfirmationTest {
 
         val result = run(model, "checkout.html")
 
-        assertEquals("Success: Goal met", result.text)
+        assertEquals("Success: Ordered.", result.text)
         assertEquals(1, host.dialogs.size)
-        assertTrue(host.notifications.any { it.message.startsWith("Confirmation needed: ") })
+        assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") })
     }
 
     @Test
@@ -80,7 +81,7 @@ class ConfirmationTest {
         host.dialogAnswers += UserInteractionCanceledException()
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("button", "Place order")}}""")) })
 
-        assertEquals("Error: declined by user", run(model, "checkout.html").text)
+        assertEquals("Success: $DECLINED", run(model, "checkout.html").text)
         assertFalse("/order.html" in site.requested)
     }
 
@@ -97,7 +98,7 @@ class ConfirmationTest {
 
         val result = run(model, "login.html")
 
-        assertEquals("Success: Goal met", result.text)
+        assertEquals("Success: Logged in.", result.text)
         assertEquals(0, host.dialogs.size)
         assertTrue(host.logs.any { "model flag cleared: sign-in submit" in it }, host.logs.joinToString("\n"))
     }
@@ -111,7 +112,7 @@ class ConfirmationTest {
                 { listOf(call("click", """{"ref": ${it.ref("button", "Create account")}, "irreversible": true, "reason": "creates an account"}""")) },
             )
 
-        assertEquals("Error: declined by user", run(model, "signup.html").text)
+        assertEquals("Success: Stopped: you declined to press “Create account” on 127.0.0.1. Nothing was done.", run(model, "signup.html").text)
         assertEquals(1, host.dialogs.size)
         assertFalse(host.logs.any { "model flag cleared" in it })
     }
@@ -126,7 +127,7 @@ class ConfirmationTest {
                 { listOf(call("finish", """{"goal_met": true, "summary": "Logged in."}""")) },
             )
 
-        assertEquals("Success: Goal met", run(model, "login.html").text)
+        assertEquals("Success: Logged in.", run(model, "login.html").text)
         assertEquals(1, host.dialogs.size)
     }
 
@@ -140,7 +141,7 @@ class ConfirmationTest {
                 { listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1\n"}""")) },
             )
 
-        assertEquals("Error: declined by user", run(model, "lookup.html").text)
+        assertEquals("Success: Stopped: you declined to send this text on 127.0.0.1. Nothing was done.", run(model, "lookup.html").text)
         assertEquals(2, model.requests.size, "the plain type asked nothing")
         assertEquals(1, host.dialogs.size)
         assertFalse("/order.html" in site.requested)
@@ -152,12 +153,66 @@ class ConfirmationTest {
         // redirect.html sends the browser to localhost, which is not an allowed domain.
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("checkbox", "Remember me")}}""")) })
 
-        assertEquals("Error: declined by user", run(model, "redirect.html").text)
+        assertTrue(run(model, "redirect.html").text.startsWith("Success: Stopped: you declined to press “Remember me” on "))
         assertEquals(1, host.dialogs.size)
     }
 
     @Test
-    fun `the dialog shows action, element, URL and reason, HTML-escaped`() {
+    fun `the dialog asks one plain question with the button text, the reason and two buttons, and logs the raw step`() {
+        site.pages["checkout.html"] =
+            javaClass.getResource("/fixtures/checkout.html")!!.readText().replace(">Place order<", ">Place your order – $12.49<")
+        host.dialogAnswers += declineClicked
+        val model =
+            ScriptedModel(
+                {
+                    listOf(
+                        call(
+                            "click",
+                            """{"ref": ${it.ref("button", "Place your order – $12.49")}, "irreversible": true, "reason": "This places the order."}""",
+                        ),
+                    )
+                },
+            )
+
+        run(model, "checkout.html")
+
+        val html = host.dialogs.single()
+        assertTrue("AI Browser Agent · needs your OK" in html, html)
+        assertTrue("Place this order on 127.0.0.1?" in html, html)
+        assertTrue("It will press “Place your order – $12.49”" in html, html)
+        assertTrue("This places the order." in html, html)
+        assertTrue(html.indexOf(">No, stop here</a>") in 0 until html.indexOf(">Yes, place this order</a>"), html)
+        assertTrue("Closing this window, or leaving the Tasks screen, counts as No. The task waits until you answer." in html, html)
+        assertFalse("button &quot;" in html || "button \"" in html || site.url("checkout.html") in html || "<script" in html, html)
+        assertTrue(host.logs.any { "button \"Place your order – $12.49\"" in it && site.url("checkout.html") in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `without a reason the dialog says why the step was flagged`() {
+        host.dialogAnswers += declineClicked
+        val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("button", "Place order")}}""")) })
+
+        run(model, "checkout.html")
+
+        assertTrue("The agent gave no reason. It flagged this step because the button says “Place order”." in host.dialogs.single(), host.dialogs.single())
+    }
+
+    @Test
+    fun `a type step quotes the text it will send`() {
+        site.pages["lookup.html"] = """<html><body><form action="order.html"><input aria-label="Order number"></form></body></html>"""
+        host.dialogAnswers += declineClicked
+        val model = ScriptedModel({ listOf(call("type", """{"ref": ${it.ref("textbox", "Order number")}, "text": "A-1 & <b>\n"}""")) })
+
+        run(model, "lookup.html")
+
+        val html = host.dialogs.single()
+        assertTrue("Send this text on 127.0.0.1?" in html, html)
+        assertTrue("It will send: “A-1 &amp; &lt;b&gt;”" in html, html)
+        assertTrue(">Yes, send this text</a>" in html, html)
+    }
+
+    @Test
+    fun `the dialog HTML-escapes the button text and the reason`() {
         site.pages["checkout.html"] =
             javaClass.getResource("/fixtures/checkout.html")!!.readText().replace(">Place order<", ">Place &lt;b&gt;order&lt;/b&gt; &amp; pay<")
         host.dialogAnswers += declineClicked
@@ -176,10 +231,8 @@ class ConfirmationTest {
         run(model, "checkout.html")
 
         val html = host.dialogs.single()
-        assertTrue("click" in html, html)
         assertTrue("Place &lt;b&gt;order&lt;/b&gt; &amp; pay" in html, html)
         assertTrue("&lt;script&gt;alert(1)&lt;/script&gt;" in html, html)
-        assertTrue(site.url("checkout.html") in html, html)
         assertFalse("<script>alert" in html || "<b>order" in html, html)
     }
 
@@ -189,5 +242,6 @@ class ConfirmationTest {
     private companion object {
         const val EMAIL = "customer@practicesoftwaretesting.com"
         const val PASSWORD = "welcome01"
+        const val DECLINED = "Stopped: you declined to place this order on 127.0.0.1. Nothing was done."
     }
 }

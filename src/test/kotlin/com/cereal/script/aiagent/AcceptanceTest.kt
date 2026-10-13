@@ -24,7 +24,8 @@ import kotlin.test.assertTrue
 
 /** One task start of the real script (real Anthropic adapter via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
 private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
-    private val script = AiAgentScript(profilesDir = profiles)
+    // Presets ignore the Server URL, so point the real Anthropic adapter at the recorder here.
+    private val script = AiAgentScript({ AnthropicClient(traffic.baseUrl, it.apiKey()!!.reveal(), it.model()!!) }, profiles)
     private val provider = host.create()
 
     /** One goal run (one execute), reported as a results row. */
@@ -103,11 +104,10 @@ class G1MonitorTest {
                 goal = "Notify me when Long Nose Pliers is back in stock",
                 startUrl = ui,
                 apiKey = Secret(key),
-                baseUrl = traffic.baseUrl,
                 model = ACCEPTANCE_MODEL,
                 runMode = RunMode.Repeat,
                 repeatInterval = 60,
-                reLearn = true, // the preference fake is static: forget any cache an earlier acceptance run left
+                onNextStart = OnNextStart.ForgetSteps,
             )
 
         AcceptanceTask("G1", config, host, traffic).use {
@@ -152,21 +152,20 @@ class G2LoginReadTest {
 
     private fun latestInvoice(): JsonObject = Demo.api.invoices(token)["data"]!!.jsonArray.maxBy { it.jsonObject["invoice_date"]!!.jsonPrimitive.content }.jsonObject
 
-    private fun config(goal: String, runMode: RunMode, reLearn: Boolean) =
+    private fun config(goal: String, runMode: RunMode, forget: Boolean) =
         TestConfig(
             goal = goal,
             startUrl = Demo.url,
             apiKey = Secret(key),
-            baseUrl = traffic.baseUrl,
             model = ACCEPTANCE_MODEL,
             secrets = Demo.secrets,
             runMode = runMode,
-            reLearn = reLearn,
+            onNextStart = if (forget) OnNextStart.ForgetSteps else OnNextStart.Keep,
         )
 
     @Test
     fun `G2 notifies the latest invoice's number, date and total and never sends the password to the model`() {
-        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once, reLearn = true), host, traffic).use {
+        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once, forget = true), host, traffic).use {
             val stats = run("Once (learn)")
             assertIs<ExecutionResult.Success>(stats.result, stats.result.message)
             stats.assertCacheReadsOnLaterSteps()
@@ -178,7 +177,7 @@ class G2LoginReadTest {
         val date = invoice["invoice_date"]!!.jsonPrimitive.content.substringBefore(' ')
         val total = money(invoice["total"]!!.jsonPrimitive.double)
         for (expected in listOf(number, date, total)) assertTrue(expected in message, "'$expected' (API: $invoice) missing from:\n$message")
-        assertTrue(message.startsWith("Goal met"), message)
+        assertTrue(!message.startsWith("Goal "), "the headline is the model's answer: $message")
         traffic.assertNeverContains(Demo.password, "the password")
         traffic.assertFallbacksAccepted()
     }
@@ -192,7 +191,7 @@ class G2LoginReadTest {
         val number = latestInvoice()["invoice_number"]!!.jsonPrimitive.content
         val goal = "Log in and notify me when the invoice number of my most recent order is no longer $number"
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat, reLearn = true), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat, forget = true), host, traffic).use {
             val learned = run("Repeat run 1 (learn)")
             assertIs<ExecutionResult.Loop>(learned.result, learned.result.message)
             learned.assertCacheReadsOnLaterSteps()
@@ -202,7 +201,7 @@ class G2LoginReadTest {
             "run 1 wrote no replay cache: ${host.logs.filter { "replay cache" in it }}",
         )
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat, reLearn = false), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat, forget = false), host, traffic).use {
             val replay = run("Repeat run 2 (replay, fresh profile)")
             assertIs<ExecutionResult.Loop>(replay.result, replay.result.message)
             assertEquals(0, replay.steps, "the replay called the model: ${host.logs.filter { "replay miss" in it }}")
@@ -238,7 +237,7 @@ class G3BuyTest {
 
     private fun count() = invoices()["total"]!!.jsonPrimitive.int
 
-    // Fresh profile (empty cart) and reLearn per run: a cached purchase must never replay into the other test.
+    // Fresh profile (empty cart) and forgotten steps per run: a cached purchase must never replay into the other test.
     private fun task() =
         AcceptanceTask(
             "G3",
@@ -246,10 +245,9 @@ class G3BuyTest {
                 goal = "Log in and buy one Claw Hammer, paying cash on delivery",
                 startUrl = Demo.url,
                 apiKey = Secret(key),
-                baseUrl = traffic.baseUrl,
                 model = ACCEPTANCE_MODEL,
                 secrets = Demo.secrets,
-                reLearn = true,
+                onNextStart = OnNextStart.ForgetSteps,
             ),
             host,
             traffic,
@@ -262,14 +260,14 @@ class G3BuyTest {
 
         task().use {
             val stats = run("Decline")
-            assertIs<ExecutionResult.Error>(stats.result)
-            assertEquals("declined by user", stats.result.message)
+            assertIs<ExecutionResult.Success>(stats.result)
+            assertTrue(stats.result.message.matches(Regex("Stopped: you declined to .+\\. Nothing was done\\.")), stats.result.message)
             assertEquals(1, stats.dialogs, "one confirmation, declined")
         }
 
         assertEquals(before, count(), "an invoice was created after Decline")
-        assertTrue(host.notifications.any { it.message.startsWith("Confirmation needed: ") }, host.notifications.map { it.message }.toString())
-        assertTrue(host.notifications.last().message.startsWith("Declined by user"), host.notifications.last().message)
+        assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") }, host.notifications.map { it.message }.toString())
+        assertTrue(host.notifications.last().message.startsWith("Stopped: you declined to "), host.notifications.last().message)
         traffic.assertNeverContains(Demo.password, "the password")
         traffic.assertFallbacksAccepted()
     }

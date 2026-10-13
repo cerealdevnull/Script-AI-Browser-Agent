@@ -5,6 +5,7 @@ import com.cereal.sdk.ScriptConfiguration
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import mockwebserver3.Dispatcher
@@ -29,7 +30,7 @@ import kotlin.test.assertTrue
 
 /**
  * Loads the shrunk `build/cereal/release.jar` like the host does and runs one goal: real Chrome on a fixture page,
- * and the real Anthropic adapter talking to a fake Messages API. Run with `./gradlew scriptJarTest`.
+ * and the real OpenAI-compatible adapter (Custom provider) talking to a fake Chat Completions API. Run with `./gradlew scriptJarTest`.
  */
 @Tag("scriptJar")
 class ScriptJarTest {
@@ -54,17 +55,20 @@ class ScriptJarTest {
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->
-                api.dispatcher = FakeMessagesApi()
+                api.dispatcher = FakeChatCompletions()
                 api.start()
                 val product = javaClass.getResource("/fixtures/product.html")!!.readText()
                 site.pages["product.html"] = product.replace("In stock", "Out of stock")
                 val repeat = loader.loadClass("${scriptClass.packageName}.RunMode").enumConstants.single { it.toString() == "Repeat" }
+                val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" }
                 val values =
                     mapOf(
                         "goal" to "Tell me when Long Nose Pliers is in stock",
                         "startUrl" to site.url(),
                         "runMode" to repeat,
-                        "baseUrl" to api.url("/").toString(),
+                        "provider" to custom,
+                        "baseUrl" to api.url("/v1").toString(),
+                        "model" to "llama3",
                         "apiKey" to Secret("test-key"),
                     )
                 // Like the host's config proxy: stored values, or the interface default.
@@ -89,27 +93,32 @@ class ScriptJarTest {
                     }
                 }
 
-                assertEquals(2, api.requestCount)
-                assertEquals("Goal met\nreplayed, $0", host.notifications.single().message)
+                assertEquals(3, api.requestCount)
+                val (watching, met) = host.notifications.map { it.message }
+                assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
+                assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
             }
         }
     }
 
     /** Clicks the product link, then finishes "not met" with a Check on the stock text. */
-    private class FakeMessagesApi : Dispatcher() {
+    private class FakeChatCompletions : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {
+            // The pre-flight's GET /models: a server without one is skipped.
+            if (request.method == "GET") return MockResponse.Builder().code(404).build()
             val body = request.body!!.utf8()
             val ref = Regex("""\[(\d+)] link \\"Long Nose Pliers\\"""").find(body)?.groupValues?.get(1)
             val stock = Regex("""\[(t\d+)] StaticText \\"Out of stock\\"""").find(body)?.groupValues?.get(1)
-            val toolUse =
+            val (name, args) =
                 if (stock != null) {
-                    """{"type":"tool_use","id":"t2","name":"finish","input":{"goal_met":false,"summary":"Out of stock.","readouts":null,""" +
-                        """"check":{"ref":"$stock","condition":"textContains","expected":"In stock"}}}"""
+                    "finish" to """{"goal_met":false,"summary":"Out of stock.","readouts":null,"check":{"ref":"$stock","condition":"textContains","expected":"In stock"}}"""
                 } else {
-                    """{"type":"tool_use","id":"t1","name":"click","input":{"ref":$ref}}"""
+                    "click" to """{"ref":$ref}"""
                 }
+            val call = """[{"id":"c1","type":"function","function":{"name":"$name","arguments":${JsonPrimitive(args)}}}]"""
             return MockResponse.Builder().body(
-                """{"model":"claude-opus-5-5","stop_reason":"tool_use","content":[$toolUse],"usage":{"input_tokens":10,"output_tokens":5}}""",
+                """{"model":"llama3","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":$call}}],""" +
+                    """"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}""",
             ).build()
         }
     }

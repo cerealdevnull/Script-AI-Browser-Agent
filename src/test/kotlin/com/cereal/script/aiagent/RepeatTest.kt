@@ -8,6 +8,10 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -30,15 +34,16 @@ class RepeatTest {
         goal: String = GOAL,
         startPath: String = "",
         secrets: List<Pair<String, Secret>> = emptyList(),
-        reLearn: Boolean = false,
+        onNextStart: OnNextStart = OnNextStart.Keep,
         maxTaskCost: Double = 10.0,
+        repeatInterval: Int = 7,
     ) = TestConfig(
         goal = goal,
         startUrl = site.url(startPath),
         runMode = RunMode.Repeat,
-        repeatInterval = 7,
+        repeatInterval = repeatInterval,
         secrets = secrets,
-        reLearn = reLearn,
+        onNextStart = onNextStart,
         maxTaskCost = maxTaskCost,
     )
 
@@ -46,13 +51,14 @@ class RepeatTest {
     private fun task(
         model: ModelClient,
         config: TestConfig = config(),
+        clock: Clock = Clock.systemDefaultZone(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AiAgentScript({ model }, profiles)
+        val script = AiAgentScript({ model }, profiles, clock = clock)
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
-            block { script.execute(config, provider) {} }
+            block { script.execute(config, provider) { host.statuses += it } }
         } finally {
             script.onFinish(config, provider)
         }
@@ -68,13 +74,14 @@ class RepeatTest {
         }
 
     /** Learns: open the product, then finish "not met" with a Check on the stock text. */
-    private fun learning() =
+    private fun learning(usage: Usage = Usage(1000, 100)) =
         ScriptedModel(
             {
                 assertTrue("Run mode: Repeat" in it.lastText, it.lastText)
                 listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}"""))
             },
             { listOf(call("finish", notMet(it))) },
+            usage = usage,
         )
 
     private fun notMet(request: ModelRequest) =
@@ -82,26 +89,124 @@ class RepeatTest {
             "check": {"ref": "${request.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}}"""
 
     @Test
-    fun `a monitor learns once, replays with zero model calls, then notifies once when the stock flips`() {
+    fun `between checks an unpriced model's task total shows as unknown, never $0`() {
+        stock("Out of stock")
+        val clock = TestClock(Instant.parse("2026-10-12T14:32:00Z"))
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", notMet(it))) },
+                models = listOf("llama3", "llama3"),
+            )
+
+        task(model, config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
+            assertEquals("Not yet · checked 14:32 · next 14:47 · unknown (no price for llama3) of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
+        }
+    }
+
+    @Test
+    fun `the reset note shows only on the first check's result`() {
+        stock("Out of stock")
+
+        task(learning(), config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            stock("In stock")
+            assertIs<ExecutionResult.Success>(execute())
+        }
+        assertFalse("Learned from scratch" in host.notifications.last().message, host.notifications.last().message)
+    }
+
+    @Test
+    fun `a monitor says once what it watches, stays quiet on later checks, and notifies once when the stock flips`() {
         stock("Out of stock")
         val model = learning()
 
-        task(model) { execute ->
+        task(model, clock = TestClock(Instant.parse("2026-10-09T14:32:00Z"))) { execute ->
             val first = execute()
             assertIs<ExecutionResult.Loop>(first)
             assertEquals(7_000, first.delay)
-            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+            assertEquals(
+                "Watching: Long Nose Pliers shows “In stock”. I'll check every 7 seconds and notify you when it does. Later checks are free.\nCost: \$0.01",
+                host.notifications.single().message,
+            )
             assertNotNull(cache(), "the replay cache was written")
 
             repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
             assertEquals(2, model.requests.size, "replays made no model request")
-            assertTrue(host.notifications.isEmpty())
+            assertEquals(1, host.notifications.size, "quiet checks send nothing")
 
             stock("In stock")
             assertIs<ExecutionResult.Success>(execute())
             assertEquals(2, model.requests.size)
-            assertEquals("Goal met\nreplayed, \$0", host.notifications.single().message)
+            assertEquals(2, host.notifications.size)
+            assertEquals("Now holds: Long Nose Pliers shows “In stock”\nCost: \$0.01 over 4 checks since Oct 9", host.notifications.last().message)
         }
+    }
+
+    @Test
+    fun `a monitor warns once when the task total passes 80 percent of Max per task`() {
+        stock("Out of stock")
+
+        // Learning costs $0.42 of $0.50; the replays after it cost nothing and stay quiet.
+        task(learning(Usage(35_000, 3_500)), config(maxTaskCost = 0.5)) { execute ->
+            repeat(3) { assertIs<ExecutionResult.Loop>(execute()) }
+        }
+        assertEquals(
+            "This monitor has spent \$0.42 of its \$0.50 limit.\nRaise Max \$ per task to keep it running past \$0.50.",
+            host.notifications.map { it.message }.single { it.startsWith("This monitor") },
+        )
+    }
+
+    @Test
+    fun `a replay after a restart sends nothing, and only the first heal in a streak notifies`() {
+        stock("Out of stock")
+        task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        host.notifications.clear()
+
+        val model = ScriptedModel({ listOf(call("finish", notMet(it))) }, { listOf(call("finish", notMet(it))) })
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+
+            // The watched element moves on two checks in a row: each heals.
+            site.pages["product.html"] = "<html><body><div><p>Out of stock</p></div></body></html>"
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(listOf("The page changed, so I re-learned it for \$0.01. Still watching."), host.notifications.map { it.message }, host.logs.joinToString("\n"))
+            site.pages["product.html"] = "<html><body><section><p>Out of stock</p></section></body></html>"
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals(1, host.notifications.size, "a second heal in the streak is quiet")
+        }
+        assertEquals(2, model.requests.size)
+    }
+
+    /** A clock the test moves by hand, in UTC. */
+    private class TestClock(var now: Instant) : Clock() {
+        override fun instant() = now
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId) = this
+    }
+
+    @Test
+    fun `between checks the task row shows when it checked, when it checks next, and the task total`() {
+        stock("Out of stock")
+        val clock = TestClock(Instant.parse("2026-10-12T14:32:00Z"))
+
+        task(learning(), config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
+            val first = "Not yet · checked 14:32 · next 14:47 · \$0.01 of \$5 total"
+            assertEquals(first, assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(first, host.statuses.last())
+
+            clock.now = Instant.parse("2026-10-12T14:47:00Z")
+            assertEquals("Not yet · checked 14:47 · next 15:02 · \$0.01 of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
+            assertTrue(host.logs.any { "check 2" in it }, host.logs.joinToString("\n"))
+
+            clock.now = Instant.parse("2026-10-12T15:02:00Z")
+            site.close()
+            val retry = "Couldn't reach 127.0.0.1 (1 of 3) · retrying 15:17"
+            assertEquals(retry, assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(retry, host.statuses.last())
+        }
+        assertTrue(host.notifications.single().message.startsWith("Watching: "), host.notifications.toString())
     }
 
     @Test
@@ -122,7 +227,7 @@ class RepeatTest {
     }
 
     @Test
-    fun `a Check that disagrees with goal_met is rejected twice, then the run reports but caches nothing`() {
+    fun `a Check that disagrees with goal_met is rejected twice, then the run stops and caches nothing`() {
         stock("Out of stock")
         // "Out of stock" contains "Out of stock": true on the page, while the model says not met.
         var wrong = ""
@@ -142,7 +247,7 @@ class RepeatTest {
                 disagreeing,
             )
 
-        task(model) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
         assertEquals(4, model.requests.size)
         assertNull(cache())
@@ -162,10 +267,57 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
-        assertEquals("Goal met\n2 steps, \$0.01", host.notifications.single().message)
+        val met = host.notifications.single().message
+        assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: \$0.01 over 1 check since "), met)
         val cached = Json.parseToJsonElement(assertNotNull(cache())).jsonObject
         assertEquals(1, cached.getValue("steps").jsonArray.size)
         assertTrue(cached["check"] == null || cached["check"] is JsonNull, cached.toString())
+    }
+
+    @Test
+    fun `a first run that finds nothing to watch stops the task at once with a reword message`() {
+        stock("Out of stock")
+        val model = ScriptedModel(
+            {
+                assertTrue("If the goal is a question, watch for the answer that makes it worth notifying, usually yes." in it.lastText, it.lastText)
+                noCheck(it)
+            },
+            noCheck, noCheck,
+        )
+
+        task(model, config(goal = "Is Long Nose Pliers in stock?")) { execute ->
+            val stopped = execute()
+            assertIs<ExecutionResult.Error>(stopped)
+            assertEquals("Couldn't find something on the page to watch.", stopped.message)
+        }
+
+        assertEquals(3, model.requests.size)
+        assertEquals(
+            "Couldn't find something on the page to watch.\n" +
+                "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again.\nCost: \$0.02",
+            host.notifications.single().message,
+        )
+        assertTrue(host.logs.any { "nothing cached" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `a heal that finds nothing to watch is a failed heal that points at Forget learned steps`() {
+        stock("Out of stock")
+        val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) }, noCheck, noCheck, noCheck)
+
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            site.pages["index.html"] = "<html><body><nav><a href=\"order.html\">Hammers</a></nav></body></html>"
+            val failed = execute()
+            assertIs<ExecutionResult.Error>(failed)
+            assertEquals("Couldn't find something on the page to watch.", failed.message)
+        }
+
+        assertEquals(5, model.requests.size)
+        assertEquals(
+            "Couldn't find something on the page to watch.\nPick “Forget learned steps” in On next start, then start the task again.\nCost: \$0.02",
+            host.notifications.last().message,
+        )
     }
 
     @Test
@@ -180,7 +332,7 @@ class RepeatTest {
     }
 
     @Test
-    fun `Re-learn removes the entry at task start, and an edited goal has its own entry`() {
+    fun `Forget learned steps acts once, at the task start where it was picked, and an edited goal has its own entry`() {
         stock("Out of stock")
         task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertNotNull(cache())
@@ -188,12 +340,23 @@ class RepeatTest {
         val edited = "$GOAL, please"
         assertNull(cache(edited))
         val relearning = learning()
-        task(relearning, config(reLearn = true)) { execute ->
-            assertNull(cache(), "Re-learn deleted the entry at task start")
-            assertIs<ExecutionResult.Loop>(execute())
+        host.statuses.clear()
+        task(relearning, config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
+            assertNull(cache(), "the entry was deleted at task start")
+            repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
         }
-        assertEquals(2, relearning.requests.size)
+        assertEquals(2, relearning.requests.size, "the second check replayed")
+        assertEquals("Forgot learned steps", host.statuses.first())
+        assertEquals(1, host.statuses.count { it == "Forgot learned steps" }, "a Repeat check never resets: ${host.statuses}")
+        assertEquals(1, host.logs.count { "Forgot learned steps" in it }, host.logs.toString())
         assertNotNull(cache())
+
+        // The next start with the same choice keeps what was learned.
+        val again = ScriptedModel()
+        host.statuses.clear()
+        task(again, config(onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertTrue(again.requests.isEmpty())
+        assertFalse("Forgot learned steps" in host.statuses)
     }
 
     @Test
@@ -240,8 +403,9 @@ class RepeatTest {
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, host.dialogs.size)
             val declined = execute()
-            assertIs<ExecutionResult.Error>(declined)
-            assertEquals("declined by user", declined.message)
+            // A No ends even a monitor as a normal finish.
+            assertIs<ExecutionResult.Success>(declined)
+            assertEquals("Stopped: you declined to place this order on 127.0.0.1. Nothing was done.", declined.message)
         }
 
         assertEquals(3, host.dialogs.size)
@@ -252,22 +416,26 @@ class RepeatTest {
     @Test
     fun `the task cap counts every iteration and ends the task with no further Loop, until a restart`() {
         stock("Out of stock")
-        // Finish without a Check: Repeat rejects it twice, then reports "not met" uncached, so every iteration learns.
-        val noCheck: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
-        val model = ScriptedModel(noCheck, noCheck, noCheck, noCheck)
+        // Learns in 2 steps; the next iteration's replay misses, so the model heals.
+        val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) }, noCheck, noCheck)
 
         task(model, config(maxTaskCost = 0.02)) { execute ->
-            assertIs<ExecutionResult.Loop>(execute()) // 3 steps, $0.018
-            val stopped = execute() // 1 step brings the task to $0.024
+            assertIs<ExecutionResult.Loop>(execute()) // 2 steps, $0.012
+            site.pages["index.html"] = "<html><body><nav><a href=\"order.html\">Hammers</a></nav></body></html>"
+            val stopped = execute() // 2 heal steps bring the task to $0.024
             assertIs<ExecutionResult.Error>(stopped)
-            assertEquals("Step/cost limit reached: max \$ per task (\$0.02)", stopped.message)
+            assertEquals("This task has spent \$0.02, its Max \$ per task limit.", stopped.message)
         }
         assertEquals(4, model.requests.size)
-        assertEquals("Stopped: Step/cost limit reached: max \$ per task (\$0.02)\n1 step, \$0.01", host.notifications.single().message)
+        assertEquals(
+            "This task has spent \$0.02, its Max \$ per task limit.\nRaise Max \$ per task to keep it running.\nCost: \$0.01",
+            host.notifications.last().message,
+        )
 
-        val restarted = ScriptedModel(noCheck, noCheck, noCheck)
-        task(restarted, config(maxTaskCost = 0.02)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
-        assertEquals(3, restarted.requests.size, "a restart resets the task total")
+        site.pages.remove("index.html")
+        val restarted = learning()
+        task(restarted, config(maxTaskCost = 0.02, onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertEquals(2, restarted.requests.size, "a restart resets the task total")
     }
 
     @Test
@@ -300,7 +468,7 @@ class RepeatTest {
             )
 
         task(model, config(goal = "Watch my account", startPath = "login.html", secrets = listOf("email" to Secret(EMAIL)))) { execute ->
-            assertIs<ExecutionResult.Loop>(execute())
+            execute() // ends (nothing to watch), but the task's scrubber lives on
             // The next iteration's page shows the email without the model typing it again.
             site.pages["login.html"] = "<html><body><h1>Account</h1><p>Signed in as $EMAIL</p></body></html>"
             execute()
@@ -311,27 +479,51 @@ class RepeatTest {
 
     private val down: suspend (ModelRequest) -> List<ToolCall> = { throw ModelException("Model error: HTTP 503: overloaded", transient = true) }
 
-    // Finish without a Check: rejected twice, then reported "not met" uncached, so the next iteration asks the model again.
+    // Finish without a Check: Repeat rejects it (twice at most, then the run ends with nothing to watch).
     private val noCheck: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
 
     @Test
     fun `a transient failure loops quietly, three in a row end the task, and a good iteration resets the count`() {
         stock("Out of stock")
-        val model = ScriptedModel(down, down, noCheck, noCheck, noCheck, down, down, down)
+        val model = ScriptedModel(down, down, { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) }, down, down, down)
 
         task(model) { execute ->
             repeat(2) { assertEquals(7_000, assertIs<ExecutionResult.Loop>(execute()).delay) }
             assertIs<ExecutionResult.Loop>(execute()) // a good iteration
+            // Later replays miss, so each asks the model again.
+            site.pages["index.html"] = "<html><body><nav><a href=\"order.html\">Hammers</a></nav></body></html>"
             repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
-            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+            assertEquals(1, host.notifications.size, host.notifications.toString())
             assertTrue(host.logs.any { "transient failure 2 of 3" in it }, host.logs.joinToString("\n"))
 
             val ended = execute()
             assertIs<ExecutionResult.Error>(ended)
-            assertEquals("Model error: HTTP 503: overloaded", ended.message)
+            assertEquals("The monitor stopped: 3 checks in a row couldn't reach Anthropic.", ended.message)
         }
-        assertEquals(8, model.requests.size)
-        assertEquals("Failed: Model error: HTTP 503: overloaded\n0 steps, \$0.00", host.notifications.single().message)
+        assertEquals(7, model.requests.size)
+        assertEquals(
+            "The monitor stopped: 3 checks in a row couldn't reach Anthropic.\nStart the task again when it's back.\nCost: \$0",
+            host.notifications.last().message,
+        )
+    }
+
+    @Test
+    fun `a Start URL that won't load ends the first check, but a later check retries it`() {
+        stock("Out of stock")
+        val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) })
+        val bad = TestConfig(startUrl = "https://practicesoftwaretestin.invalid", runMode = RunMode.Repeat, repeatInterval = 7)
+
+        task(model, bad) { execute ->
+            val ended = assertIs<ExecutionResult.Error>(execute())
+            assertEquals("Couldn't open https://practicesoftwaretestin.invalid (site not found). Check the Start URL.", ended.message)
+        }
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute()) // learns a Check
+            site.close()
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.logs.any { "transient failure 1 of 3" in it }, host.logs.joinToString("\n"))
+        }
+        assertEquals(2, model.requests.size, "the bad Start URL and the unreachable replay cost no model call")
     }
 
     @Test
@@ -340,7 +532,7 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Failed: Model/API key rejected: HTTP 401: invalid x-api-key\n0 steps, \$0.00", host.notifications.single().message)
+        assertEquals("Anthropic returned an error: HTTP 401: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     private companion object {

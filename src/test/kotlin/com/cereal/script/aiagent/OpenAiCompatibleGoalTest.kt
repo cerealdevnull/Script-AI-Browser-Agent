@@ -39,14 +39,14 @@ class OpenAiCompatibleGoalTest {
         )
         api.start()
         val config =
-            TestConfig(provider = Provider.OpenAICompatible, baseUrl = api.url("/v1").toString(), apiKey = null, model = "llama3", startUrl = site.url())
+            TestConfig(provider = Provider.Custom, baseUrl = api.url("/v1").toString(), apiKey = null, model = "llama3", startUrl = site.url())
 
         val result = runBlocking { host.run(AiAgentScript(profilesDir = tempProfiles()), config) }
 
         assertIs<ExecutionResult.Success>(result)
-        assertEquals("Goal met\nLong Nose Pliers is in stock.\n2 steps, $0.00", host.notifications.single().message)
+        assertEquals("Long Nose Pliers is in stock.\nCost: unknown (no price for llama3)", host.notifications.single().message)
         val requests = List(api.requestCount) { api.takeRequest() }
-        assertEquals(listOf("/v1/chat/completions", "/v1/chat/completions"), requests.map { it.url.encodedPath })
+        assertEquals(listOf("/v1/models", "/v1/chat/completions", "/v1/chat/completions"), requests.map { it.url.encodedPath })
         requests.forEach { assertNull(it.headers["Authorization"]) }
     }
 
@@ -56,6 +56,8 @@ class OpenAiCompatibleGoalTest {
             private var n = 0
 
             override fun dispatch(request: RecordedRequest): MockResponse {
+                // No models endpoint, like some local servers: the pre-flight check is skipped.
+                if (request.method == "GET") return MockResponse.Builder().code(404).build()
                 val last = Json.parseToJsonElement(request.body!!.utf8()).jsonObject["messages"]!!.jsonArray.last().jsonObject
                 val (name, args) = turns[n++](last["content"]!!.jsonPrimitive.content)
                 val message =

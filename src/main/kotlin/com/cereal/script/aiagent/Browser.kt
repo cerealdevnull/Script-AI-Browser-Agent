@@ -528,12 +528,13 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         }
     }
 
-    /** Waits while autoconsent is rejecting a banner (capped at 3 s from page load) and logs each rejection. */
+    /** Waits while autoconsent is rejecting a banner (capped at 3 s from when this wait starts) and logs each rejection. */
     private suspend fun consentSettled() {
+        val deadline = System.nanoTime() + 3_000_000_000
         while (true) {
             val state = tab.rawEvaluate(CONSENT_STATE_JS) as? JsonObject ?: return
             state.getValue("rejected").jsonArray.forEach { log("Rejected cookies (${it.jsonPrimitive.content.lowercase()})") }
-            if (!state.getValue("busy").jsonPrimitive.boolean) return
+            if (!state.getValue("busy").jsonPrimitive.boolean || System.nanoTime() >= deadline) return
             delay(100)
         }
     }
@@ -662,7 +663,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             const c = window.__cerealConsent;
             if (!c) return {busy: false, rejected: []};
             const rejected = c.results.splice(0).filter(r => r.result).map(r => r.cmp);
-            const busy = ['cmpDetected', 'openPopupDetected', 'runningOptOut'].includes(c.state) && performance.now() < 3000;
+            const busy = ['cmpDetected', 'openPopupDetected', 'runningOptOut'].includes(c.state);
             return {busy, rejected};
         })()"""
 

@@ -1,6 +1,7 @@
 package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
+import com.cereal.sdk.component.notification.telegram.model.TelegramParseMode
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -90,13 +91,28 @@ class OnceGoalTest {
     }
 
     @Test
-    fun `Telegram gets the message as plain text so a URL with an underscore is not dropped`() {
-        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "See https://shop.test/long_nose_pliers"}""")) }))
+    fun `Telegram and Discord get the result rich, escaped, with the page link, so a URL with an underscore is not dropped`() {
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock <b>&</b>. See https://shop.test/long_nose_pliers"}""")) }))
 
         val notification = host.notifications.single()
         val telegram = assertNotNull(notification.telegramMessage)
-        assertEquals(notification.message, telegram.text)
-        assertNull(telegram.parseMode, "no parse mode: Telegram sends it as plain text")
+        assertEquals(TelegramParseMode.HTML, telegram.parseMode)
+        assertTrue(telegram.text.startsWith("✅ <b>In stock &lt;b&gt;&amp;&lt;/b&gt;.</b>\n"), telegram.text)
+        assertTrue("<i>See https://shop.test/long_nose_pliers</i>" in telegram.text, telegram.text)
+        assertTrue("<a href=\"${site.url()}\">Open page</a> · Cost: $0.01" in telegram.text, telegram.text)
+        val embed = notification.discordMessage!!.embeds!!.single()
+        assertEquals(site.url(), embed.url)
+        assertEquals("@here", notification.discordMessage!!.content)
+    }
+
+    @Test
+    fun `a failure before Chrome starts has no page link`() {
+        runBlocking { host.run(AgentScript({ ScriptedModel() }, tempProfiles(), launchBrowser = { _, _ -> error("no Chrome") }), TestConfig(startUrl = site.url())) }
+
+        val notification = host.notifications.single()
+        assertEquals("15158332", notification.discordMessage!!.embeds!!.single().color)
+        assertNull(notification.discordMessage!!.embeds!!.single().url)
+        assertTrue("Open page" !in notification.telegramMessage!!.text)
     }
 
     @Test

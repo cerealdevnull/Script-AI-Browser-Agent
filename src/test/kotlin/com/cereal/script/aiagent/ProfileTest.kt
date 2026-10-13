@@ -19,7 +19,7 @@ class ProfileTest {
 
     private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>, onNextStart: OnNextStart = OnNextStart.Keep) =
         runBlocking {
-            host.run(AiAgentScript({ ScriptedModel(*turns) }, profiles), TestConfig(goal = goal, startUrl = site.url("session.html"), onNextStart = onNextStart))
+            host.run(AgentScript({ ScriptedModel(*turns) }, profiles), TestConfig(goal = goal, startUrl = site.url("session.html"), onNextStart = onNextStart))
         }
 
     private fun finish(): List<ToolCall> = listOf(call("finish", """{"goal_met": true, "summary": "ok"}"""))

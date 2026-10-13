@@ -42,7 +42,7 @@ class SmokeTest {
                         goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
                         baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, onNextStart = OnNextStart.ForgetSteps,
                     )
-                val script = AiAgentScript(profilesDir = tempProfiles())
+                val script = AgentScript(profilesDir = tempProfiles())
                 val provider = host.create()
                 // ponytail: a crashed site is recorded in its log and the next site still runs.
                 runCatching {

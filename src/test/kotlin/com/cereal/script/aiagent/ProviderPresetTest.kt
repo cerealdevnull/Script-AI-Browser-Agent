@@ -76,7 +76,7 @@ class ProviderPresetTest {
 
     private fun assertRejected(config: TestConfig, reason: String) =
         runBlocking {
-            val result = Host().run(AiAgentScript({ ScriptedModel() }, tempProfiles()), config)
+            val result = Host().run(AgentScript({ ScriptedModel() }, tempProfiles()), config)
             assertEquals("Fix these in the task settings: $reason.", assertIs<ExecutionResult.Error>(result).message)
         }
 }

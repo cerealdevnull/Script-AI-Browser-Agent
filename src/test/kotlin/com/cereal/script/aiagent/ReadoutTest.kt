@@ -19,7 +19,7 @@ class ReadoutTest {
     private fun run(model: ScriptedModel) =
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(goal = "Tell me the latest invoice's number, date and total", startUrl = site.url("invoices.html")),
             )
         }

@@ -76,7 +76,7 @@ class Host : ComponentProviderFactory {
     override fun create(): ComponentProvider = provider
 
     /** Runs the script like the host does, through [TestScriptRunner], and returns the last [ExecutionResult]. */
-    suspend fun run(script: AiAgentScript, config: AgentConfiguration): ExecutionResult? {
+    suspend fun run(script: Script<AgentConfiguration>, config: AgentConfiguration): ExecutionResult? {
         val recording = RecordingScript(script, statuses)
         TestScriptRunner(recording).run(config, this)
         return recording.last
@@ -104,7 +104,7 @@ class TaskPreferences : PreferenceComponent {
 }
 
 /** Remembers the last result of execute(), which [TestScriptRunner] doesn't expose. */
-class RecordingScript(private val script: AiAgentScript, private val statuses: MutableList<String> = mutableListOf()) : Script<AgentConfiguration> by script {
+class RecordingScript(private val script: Script<AgentConfiguration>, private val statuses: MutableList<String> = mutableListOf()) : Script<AgentConfiguration> by script {
     @Volatile var last: ExecutionResult? = null
 
     override suspend fun execute(

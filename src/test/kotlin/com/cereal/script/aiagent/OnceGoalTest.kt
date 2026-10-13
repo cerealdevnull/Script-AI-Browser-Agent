@@ -19,7 +19,7 @@ class OnceGoalTest {
     fun tearDown() = site.close()
 
     private fun run(model: ScriptedModel, goal: String = "Tell me whether Long Nose Pliers is in stock") =
-        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), TestConfig(goal = goal, startUrl = site.url())) }
+        runBlocking { host.run(AgentScript({ model }, tempProfiles()), TestConfig(goal = goal, startUrl = site.url())) }
 
     @Test
     fun `reaches the goal and the summary's first sentence is the headline`() {

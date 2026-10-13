@@ -201,7 +201,8 @@ internal class AgentScript(
                 learnedMet = cache?.met == true
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
-                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
+                    // A met change Check also rewrites it on a plain replay: the new value is the next baseline.
+                    if (it is Outcome.Finished && (!replayed || agent.healed || it.changed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -230,6 +231,7 @@ internal class AgentScript(
                 when (outcome) {
                     is Outcome.Failed -> outcome.reason
                     is Outcome.Stopped -> outcome.reason
+                    is Outcome.Finished if outcome.changed -> if (outcome.check!!.condition == "decreased") "Price dropped" else "Changed"
                     is Outcome.Finished -> answer.firstOrNull()?.ifEmpty { null } ?: if (outcome.goalMet) "Goal met" else "Goal not met"
                     is Outcome.Declined -> outcome.step.declined
                 },
@@ -267,6 +269,7 @@ internal class AgentScript(
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
             return retry(configuration, scrubber.forLog((outcome as Outcome.Failed).unreachable!!), statusUpdate)
         }
+        val total = { "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
         return when (outcome) {
             is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
                 report.error(
@@ -295,10 +298,17 @@ internal class AgentScript(
                 healing = agent.healed
                 ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
             }
+            // A change: tell old → new and keep watching from the new baseline.
+            is Outcome.Finished if outcome.changed -> {
+                val move = "${cut(cache?.check?.expected.orEmpty())} → ${cut(outcome.check!!.expected.orEmpty())}"
+                val readouts = outcome.readouts.map { scrubber.forLog(it.label) to scrubber.forLog(it.text) }
+                report.notify(Kind.Change, verdict, summary = scrubber.forLog(move), readouts = readouts, cost = total())
+                healing = agent.healed
+                ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
+            }
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog(it.label) to scrubber.forLog(it.text) }
                 val met = (outcome.check ?: cache?.check)?.takeIf { repeat }?.let { scrubber.forLog("Now holds: ${it.words()}") }
-                val total = "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}"
                 val stale = replayed && !outcome.goalMet && learnedMet
                 report.notify(
                     if (outcome.goalMet) Kind.Met else Kind.NotMet,
@@ -307,7 +317,7 @@ internal class AgentScript(
                     answer.getOrNull(1),
                     readouts,
                     listOfNotNull(learnedFromScratch),
-                    cost = if (repeat) total else cost(),
+                    cost = if (repeat) total() else cost(),
                 )
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(met ?: verdict)
@@ -369,7 +379,7 @@ internal class AgentScript(
      * heal's, unless that Check just missed) or none (a learned run's); a Once run needs a Check or a Readout.
      */
     private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, cached: Check?, log: (String) -> Unit) {
-        val check = if (run.goalMet) cached else run.check
+        val check = if (run.goalMet && !run.changed) cached else run.check
         val skipped =
             when {
                 !run.verified -> "the Check or Readouts failed validation"
@@ -537,6 +547,9 @@ private fun escapeHtml(s: String) =
 internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 
 private const val COST_ZERO = "Cost: \$0"
+
+/** One side of a change's `old → new`: at most 100 characters. */
+private fun cut(s: String) = if (s.length > 100) s.take(99) + "…" else s
 
 /** A cost amount: `$0.21`, `$0`, `unknown (no price for x)` or `$0.12 + unknown`. */
 private fun spent(amount: Double, unpriced: Set<String?>) =

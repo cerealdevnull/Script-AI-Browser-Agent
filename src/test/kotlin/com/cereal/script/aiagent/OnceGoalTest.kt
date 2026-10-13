@@ -145,4 +145,24 @@ class OnceGoalTest {
         assertIs<ExecutionResult.Success>(result)
         assertEquals(2, model.requests.size)
     }
+
+    @Test
+    fun `a change Check is refused in Once mode`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                {
+                    val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "changed", "expected": null, "decimal": null}"""
+                    listOf(call("finish", """{"goal_met": false, "summary": "In stock.", "readouts": null, "check": $check}"""))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("Check: changed/decreased need Repeat mode" in error, error)
+                    listOf(call("finish", """{"goal_met": false, "summary": "In stock.", "readouts": null, "check": null}"""))
+                },
+            )
+
+        assertIs<ExecutionResult.Success>(run(model))
+        assertEquals(3, model.requests.size)
+    }
 }

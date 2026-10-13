@@ -284,6 +284,148 @@ class RepeatTest {
         assertEquals(4, model.requests.size)
     }
 
+    private fun change(request: ModelRequest, text: String, condition: String, goalMet: Boolean = false) =
+        """{"goal_met": $goalMet, "summary": "Watching.", "readouts": null,
+            "check": {"ref": "${request.textRef("StaticText", text)}", "condition": "$condition", "expected": null,
+            "decimal": ${if (condition == "decreased") "\",\"" else "null"}}}"""
+
+    private fun cachedCheck(goal: String) = Json.parseToJsonElement(cache(goal = goal)!!).jsonObject.getValue("check").jsonObject
+
+    @Test
+    fun `a price drop is learned with its baseline, replays quietly, notifies old to new and keeps watching from the new price`() {
+        val goal = "Tell me when the price drops"
+        price("€ 119,99")
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", change(it, "€ 119,99", "decreased"))) },
+            )
+
+        task(model, config(goal = goal)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals("decreased", cachedCheck(goal).getValue("condition").jsonPrimitive.content)
+            assertEquals("€ 119,99", cachedCheck(goal).getValue("expected").jsonPrimitive.content)
+            host.notifications.clear()
+
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+
+            price("€ 99,99")
+            assertEquals("Price dropped", assertIs<ExecutionResult.Loop>(execute()).message)
+            val lines = host.notifications.single().message.lines()
+            assertEquals(listOf("Price dropped", "€ 119,99 → € 99,99"), lines.take(2))
+            assertTrue(lines.last().startsWith("Cost: "), lines.toString())
+            val discord = host.notifications.single().discordMessage!!
+            assertEquals("@here" to "3066993", discord.content to discord.embeds!!.single().color, "a change pings in green, like Goal met")
+            assertEquals("Price dropped", host.statuses.last())
+            assertEquals("€ 99,99", cachedCheck(goal).getValue("expected").jsonPrimitive.content)
+
+            host.notifications.clear()
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.notifications.isEmpty(), "the same lower price is no new drop")
+        }
+        assertEquals(2, model.requests.size, "replays made no model request")
+    }
+
+    @Test
+    fun `a heal keeps the cached baseline, so a price that dropped meanwhile is still told`() {
+        val goal = "Tell me when the price drops"
+        price("€ 119,99")
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", change(it, "€ 119,99", "decreased"))) },
+                { listOf(call("finish", change(it, "€ 99,99", "decreased"))) },
+            )
+
+        task(model, config(goal = goal)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            host.notifications.clear()
+            site.pages["product.html"] = "<html><body><div><p>€ 99,99</p></div></body></html>"
+            assertEquals("Price dropped", assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(listOf("Price dropped", "€ 119,99 → € 99,99"), host.notifications.single().message.lines().take(2))
+            assertEquals("€ 99,99", cachedCheck(goal).getValue("expected").jsonPrimitive.content)
+        }
+        assertEquals(3, model.requests.size)
+    }
+
+    @Test
+    fun `a text change notifies old to new as Changed and keeps watching`() {
+        val goal = "Tell me when the stock text changes"
+        stock("Out of stock")
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", change(it, "Out of stock", "changed"))) },
+            )
+
+        task(model, config(goal = goal)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertEquals("Out of stock", cachedCheck(goal).getValue("expected").jsonPrimitive.content)
+            host.notifications.clear()
+
+            assertIs<ExecutionResult.Loop>(execute())
+            assertTrue(host.notifications.isEmpty(), host.notifications.toString())
+
+            stock("Back in stock soon")
+            assertEquals("Changed", assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals(listOf("Changed", "Out of stock → Back in stock soon"), host.notifications.single().message.lines().take(2))
+            assertEquals("Back in stock soon", cachedCheck(goal).getValue("expected").jsonPrimitive.content)
+        }
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
+    fun `a change Check must start false, and decreased needs exactly one number`() {
+        price("Was €150 now € 119,99")
+        lateinit var first: ModelRequest
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                {
+                    first = it
+                    listOf(call("finish", change(it, "Was €150 now € 119,99", "changed", goalMet = true)))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("Check: a change Check starts false; set goal_met false" in error, error)
+                    listOf(call("finish", change(first, "Was €150 now € 119,99", "decreased")))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("holds 2 numbers" in error, error)
+                    listOf(call("finish", change(first, "Was €150 now € 119,99", "changed")))
+                },
+            )
+
+        task(model, config(goal = "Tell me when the price drops")) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertEquals(4, model.requests.size)
+        assertEquals("Was €150 now € 119,99", cachedCheck("Tell me when the price drops").getValue("expected").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `decreased on an element without a number is rejected`() {
+        price("Price on request")
+        lateinit var first: ModelRequest
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                {
+                    first = it
+                    listOf(call("finish", change(it, "Price on request", "decreased")))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("holds 0 numbers" in error, error)
+                    listOf(call("finish", notMet(first)))
+                },
+            )
+        site.pages["product.html"] = site.pages["product.html"]!!.replace("In stock", "Out of stock")
+
+        task(model, config(goal = "Tell me when the price drops")) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertEquals(3, model.requests.size)
+    }
+
     @Test
     fun `a Check that disagrees with goal_met is rejected twice, then the run stops and caches nothing`() {
         stock("Out of stock")

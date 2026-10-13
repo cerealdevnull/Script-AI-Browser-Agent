@@ -41,7 +41,10 @@ sealed interface Outcome {
         val verified: Boolean = true,
         val check: Check? = null,
         val recorded: List<Step> = emptyList(),
-    ) : Outcome
+    ) : Outcome {
+        /** A change Check holds: [check] carries the new baseline. */
+        val changed get() = goalMet && check?.isChange == true
+    }
 
     /**
      * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
@@ -440,12 +443,17 @@ class Agent(
         if (condition !in Check.CONDITIONS) return null to "Check: condition must be one of ${Check.CONDITIONS.joinToString()}"
         if (condition.startsWith("text") && expected.isNullOrBlank()) return null to "Check: $condition needs expected text"
         val decimal = (c["decimal"] as? JsonPrimitive)?.contentOrNull
-        val numeric = condition in Check.NUMERIC
+        val change = condition in Check.CHANGE
+        if (change && runMode != RunMode.Repeat) return null to "Check: changed/decreased need Repeat mode"
+        if (change && goalMet) return null to "Check: a change Check starts false; set goal_met false"
+        val numeric = condition in Check.NUMERIC || condition == "decreased"
         if (numeric && decimal != "," && decimal != ".") return null to "Check: $condition needs decimal \",\" or \".\" (the page's decimal separator)"
-        if (numeric && !PLAIN_NUMBER.matches(expected.orEmpty())) return null to "Check: $condition needs expected as a plain number like 50 or 119.99"
-        if (!numeric && decimal != null) return null to "Check: decimal is only for below / atMost / above / atLeast; set it to null"
+        if (condition in Check.NUMERIC && !PLAIN_NUMBER.matches(expected.orEmpty())) return null to "Check: $condition needs expected as a plain number like 50 or 119.99"
+        if (!numeric && decimal != null) return null to "Check: decimal is only for below / atMost / above / atLeast / decreased; set it to null"
         return try {
-            val check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected, decimal)
+            var check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected, decimal)
+            // A change Check's baseline is the element's text now, read by the script.
+            if (change) check = check.rebased(browser.matches(Fingerprint(check.fingerprint)).singleOrNull()?.text ?: "")
             if (numeric) {
                 val text = browser.matches(Fingerprint(check.fingerprint)).singleOrNull()?.text
                 val count = text?.let { Check.numbers(it, decimal!!).size }
@@ -557,7 +565,8 @@ class Agent(
                                 ?: throw Miss("readout '${r.label}' does not match exactly one node", "the readout '${r.label}' is gone")
                         Readout(r.label, text, Fingerprint(r.fingerprint))
                     }
-                return Outcome.Finished(goalMet, "", 0, readouts)
+                val moved = cache.check?.takeIf { goalMet && it.isChange }?.let { rebase(it) }
+                return Outcome.Finished(goalMet, "", 0, readouts, check = moved, recorded = cache.steps)
             } catch (e: Miss) {
                 e
             } catch (e: CancellationException) {
@@ -576,11 +585,22 @@ class Agent(
         recorded += done
         // Step targets are page text: they reach the model only inside <page_content>.
         val steps = done.withIndex().joinToString("") { (i, s) -> "${i + 1}. ${describe(s)}\n" }
-        return run(
-            "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
-                "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>${miss.failed}</page_content>\n",
-        )
+        val healed =
+            run(
+                "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
+                    "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>${miss.failed}</page_content>\n",
+            )
+        // A healed change Check keeps the cached baseline and is evaluated right away.
+        val old = cache.check?.takeIf { it.isChange }
+        val new = (healed as? Outcome.Finished)?.check?.takeIf { it.condition == old?.condition } ?: return healed
+        healed as Outcome.Finished
+        val kept = new.rebased(old!!.expected.orEmpty())
+        val met = runCatching { kept.evaluate(browser) }.getOrNull() == true
+        return Outcome.Finished(met, healed.summary, healed.steps, healed.readouts, healed.verified, if (met) rebase(kept) else kept, healed.recorded)
     }
+
+    /** [check] with the element's text now as its baseline. */
+    private suspend fun rebase(check: Check) = check.rebased(browser.matches(Fingerprint(check.fingerprint)).single().text)
 
     /** A replay miss: [rule] for the log, [failed] for the healing model. */
     private class Miss(val rule: String, val failed: String) : Exception(rule)
@@ -794,7 +814,9 @@ class Agent(
                         "(or [n]) ref of one element and a condition (textContains / textAbsent with expected text, enabled, " +
                         "exists; expected null for the last two; or below / atMost / above / atLeast with expected as a plain number " +
                         "(50, 119.99) and decimal set to the page's decimal separator (, or .); the element's text must show exactly " +
-                        "one number; decimal null otherwise). It must agree with goal_met now. Required in Repeat mode, else may be null.",
+                        "one number; decimal null otherwise; or, when the goal is to hear about a change, changed (any change in the " +
+                        "element's text) or decreased (its one number went down, e.g. 'tell me when the price drops'; set decimal) " +
+                        "with expected null: the script stores the current value, and goal_met must be false). It must agree with goal_met now. Required in Repeat mode, else may be null.",
                     schema(
                         "goal_met" to "boolean",
                         "summary" to "string",

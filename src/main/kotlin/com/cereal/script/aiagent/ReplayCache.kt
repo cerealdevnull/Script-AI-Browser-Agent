@@ -47,9 +47,18 @@ class Check(val fingerprint: String, val condition: String, val expected: String
         return holds(matches.singleOrNull() ?: return null)
     }
 
-    /** True/false for [match]; null (a miss) when a numeric Check finds no single number, or for an unknown condition (a newer release's cache). */
+    /**
+     * True/false for [match]; null (a miss) when a numeric Check finds no single number, `decreased` finds 2+ (0 is
+     * "not yet"), or for an unknown condition (a newer release's cache). A change Check compares with its baseline.
+     */
     fun holds(match: Match): Boolean? {
-        val expected = expected.orEmpty().replace(WHITESPACE, " ").trim()
+        val expected = collapse(expected.orEmpty())
+        if (condition == "changed") return collapse(match.text) != expected
+        if (condition == "decreased") {
+            val now = numbers(match.text, decimal ?: return null)
+            if (now.size > 1) return null
+            return now.isNotEmpty() && now[0] < (number(expected, decimal) ?: return null)
+        }
         if (condition in NUMERIC) {
             val c = (number(match.text, decimal ?: return null) ?: return null).compareTo(expected.toBigDecimalOrNull() ?: return null)
             return when (condition) {
@@ -67,6 +76,11 @@ class Check(val fingerprint: String, val condition: String, val expected: String
         }
     }
 
+    val isChange get() = condition in CHANGE
+
+    /** This change Check with [text] as its new baseline. */
+    fun rebased(text: String) = Check(fingerprint, condition, collapse(text), decimal)
+
     /** The condition in words for notifications (never "Check"): `Long Nose Pliers shows “In stock”`. */
     fun words(): String {
         val fp = Json.parseToJsonElement(fingerprint).jsonObject
@@ -81,13 +95,18 @@ class Check(val fingerprint: String, val condition: String, val expected: String
             "atMost" -> "$where is at most $expected"
             "above" -> "$where is above $expected"
             "atLeast" -> "$where is at least $expected"
+            "changed" -> "$where changes from “$expected”"
+            "decreased" -> "$where goes below “$expected”"
             else -> "the $tag at $where appears"
         }
     }
 
     companion object {
         val NUMERIC = setOf("below", "atMost", "above", "atLeast")
-        val CONDITIONS = setOf("textContains", "textAbsent", "enabled", "exists") + NUMERIC
+        val CHANGE = setOf("changed", "decreased")
+        val CONDITIONS = setOf("textContains", "textAbsent", "enabled", "exists") + NUMERIC + CHANGE
+
+        fun collapse(text: String) = text.replace(WHITESPACE, " ").trim()
 
         /** Every number in [text] with [decimal] (`,` or `.`) as separator; grouping marks only between groups of exactly 3 digits. */
         fun numbers(text: String, decimal: String): List<BigDecimal> {

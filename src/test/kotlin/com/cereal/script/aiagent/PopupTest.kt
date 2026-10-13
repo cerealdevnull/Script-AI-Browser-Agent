@@ -79,6 +79,23 @@ class PopupTest {
     }
 
     @Test
+    fun `a cookie banner in a followed tab is rejected before the model sees it`() {
+        site.pages["index.html"] = """<html><body><a href="consent-onetrust.html" target="_blank">News</a></body></html>"""
+        val model =
+            ScriptedModel(
+                click("link", "News"),
+                {
+                    assertTrue("Now in a new tab: ${site.url("consent-onetrust.html")}" in it.lastText, it.lastText)
+                    assertTrue("Cookies rejected" in it.lastText && "Accept All Cookies" !in it.lastText, it.lastText)
+                    listOf(call("finish", """{"goal_met": true, "summary": "Read it."}"""))
+                },
+            )
+        task(model) { execute -> execute() }
+        assertTrue("/rejected" in site.requested && "/accepted" !in site.requested)
+        assertTrue(host.logs.any { it == "INFO Rejected cookies (onetrust)" }, host.logs.joinToString("\n"))
+    }
+
+    @Test
     fun `a window_open delayed by 1 s is followed on the next snapshot`() {
         val model =
             ScriptedModel(

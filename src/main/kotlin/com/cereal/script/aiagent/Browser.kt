@@ -140,6 +140,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                 current = it
                 followed += it.targetId!!
                 invalidateRefs()
+                injectConsent(it) // its banner gets rejected too; settle() waits for that
                 settle()
                 note = "Now in a new tab: ${url()}"
             }

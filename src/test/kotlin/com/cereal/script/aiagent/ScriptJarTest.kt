@@ -78,7 +78,8 @@ class ScriptJarTest {
                     } as ScriptConfiguration
 
                 @Suppress("UNCHECKED_CAST")
-                val script = scriptClass.getDeclaredConstructor().newInstance() as Script<ScriptConfiguration>
+                // As the host's TaskExecutor.newInstance: the first Kotlin constructor, called with no arguments.
+                val script = scriptClass.kotlin.constructors.first().call() as Script<ScriptConfiguration>
                 val host = Host()
                 val provider = host.create()
                 runBlocking {

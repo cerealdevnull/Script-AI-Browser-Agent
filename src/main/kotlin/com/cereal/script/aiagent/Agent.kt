@@ -159,6 +159,7 @@ class Agent(
                 if (resume == null) {
                     status("Opening ${hostOf(startUrl) ?: startUrl}")
                     log("opening $startUrl")
+                    browser.reset()
                     browser.navigate(startUrl)
                 }
                 lastUrl = browser.url()
@@ -170,7 +171,7 @@ class Agent(
             Message.User(
                 scrubber.forModel(
                     "Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() +
-                        resume.orEmpty() + "\n" + pageResult(current),
+                        resume.orEmpty() + "\n" + pageResult(current, follow = resume != null),
                 ),
             )
         while (true) {
@@ -507,10 +508,12 @@ class Agent(
             try {
                 status("Opening ${hostOf(startUrl) ?: startUrl}")
                 try {
+                    browser.reset()
                     browser.navigate(startUrl)
                 } catch (e: PageLoadException) {
                     return startFailed(e)
                 }
+                browser.follow(switch = false)
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
@@ -588,6 +591,7 @@ class Agent(
      */
     private suspend fun act(call: ToolCall): ToolResult {
         val args = call.args
+        if (call.name != "read_page" && browser.tabClosed()) return ToolResult(call.id, pageResult("not run"), isError = true)
         val text =
             when (call.name) {
                 "read_page" -> pageResult("ok")
@@ -690,8 +694,11 @@ class Agent(
     private fun secretsNote() =
         if (secrets.isEmpty()) "" else "Secrets you can type with type_secret (by name): ${secrets.keys.joinToString()}\n"
 
-    private suspend fun pageResult(prefix: String) =
-        "$prefix\nurl: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    /** [follow] false: the start page was just opened, so tabs it opened by itself are not followed. */
+    private suspend fun pageResult(prefix: String, follow: Boolean = true): String {
+        val tab = browser.follow(follow)?.also(log)?.let { "$it\n" }.orEmpty()
+        return "$prefix\n${tab}url: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    }
 
     companion object {
         private const val MAX_FINISH_RETRIES = 2
@@ -776,7 +783,7 @@ class Agent(
                 ToolDef("select", "Choose the option with this visible text (or value) in the select with this ref.", schema("ref" to "integer", "option" to "string")),
                 ToolDef("scroll", "Scroll the page; direction: up or down. Snapshots already cover the whole page, so only for lazy-loaded content.", schema("direction" to "string")),
                 ToolDef("navigate", "Open an http(s) URL on an allowed domain in the tab.", schema("url" to "string")),
-                ToolDef("go_back", "Go back to the previous page.", schema()),
+                ToolDef("go_back", "Go back to the previous page. In a new tab with no earlier page, it closes the tab and returns to the one that opened it.", schema()),
                 ToolDef("wait", "Wait this many seconds (1-10) for the page to update.", schema("seconds" to "integer")),
                 ToolDef("screenshot", "Look at the visible part of the page as an image. Fallback only, when read_page isn't enough.", schema()),
                 ToolDef(

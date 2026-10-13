@@ -143,6 +143,54 @@ class PopupTest {
         assertEquals(3, model.requests.size)
     }
 
+    private fun stock(text: String) {
+        site.pages["product.html"] = javaClass.getResource("/fixtures/product.html")!!.readText().replace("In stock", text)
+    }
+
+    @Test
+    fun `a learned run through a popup replays with 0 model calls`() {
+        stock("Out of stock")
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                {
+                    val check = """{"ref": "${it.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}"""
+                    listOf(call("finish", """{"goal_met": false, "summary": "Out of stock.", "readouts": null, "check": $check}"""))
+                },
+            )
+        task(model, config(RunMode.Repeat)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertIs<ExecutionResult.Loop>(execute())
+            stock("In stock")
+            assertIs<ExecutionResult.Success>(execute())
+        }
+        assertEquals(2, model.requests.size, "the replays made no model call")
+    }
+
+    @Test
+    fun `each goal run starts with the tabs it followed earlier closed`() {
+        // Each open product tab answers the start page's ping, so the start page shows how many there are.
+        stock("In stock")
+        site.pages["product.html"] = site.pages["product.html"]!!.replace(
+            "</body>",
+            "<script>const c = new BroadcastChannel('tabs'); c.onmessage = () => c.postMessage('pong')</script></body>",
+        )
+        site.pages["index.html"] =
+            """<html><body><a href="product.html" target="_blank">Long Nose Pliers</a><p id="n">0 other tabs</p>
+            <script>let n = 0; const c = new BroadcastChannel('tabs');
+            c.onmessage = () => document.getElementById('n').textContent = ++n + ' other tabs'; c.postMessage('ping')</script></body></html>"""
+        val run: Array<suspend (ModelRequest) -> List<ToolCall>> =
+            arrayOf(
+                { listOf(call("read_page")) },
+                click("link", "Long Nose Pliers"),
+                met,
+            )
+        val model = ScriptedModel(*run, *run, *run)
+        task(model) { execute -> repeat(3) { assertIs<ExecutionResult.Success>(execute()) } }
+        val third = model.requests[7].lastText
+        assertTrue("0 other tabs" in third, third)
+    }
+
     companion object {
         const val GOAL = "Notify me when Long Nose Pliers is in stock"
     }

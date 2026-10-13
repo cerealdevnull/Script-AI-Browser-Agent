@@ -64,7 +64,27 @@ class AiAgentScript(
     private var reset: String? = null
 
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
-    override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
+    override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean =
+        logged(provider) { start(configuration, provider) }
+
+    override suspend fun execute(
+        configuration: AgentConfiguration,
+        provider: ComponentProvider,
+        statusUpdate: suspend (message: String) -> Unit,
+    ): ExecutionResult = logged(provider) { run(configuration, provider, statusUpdate) }
+
+    // The host shows an unexpected exception as "The script failed without error message.": log what it was.
+    private suspend fun <T> logged(provider: ComponentProvider, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            provider.logger().error(scrubber?.forLog(e.toString()) ?: e.toString())
+            throw e
+        }
+
+    private suspend fun start(configuration: AgentConfiguration, provider: ComponentProvider): Boolean {
         configError = validate(configuration)
         taskSpent = 0.0
         checks = 0
@@ -81,7 +101,7 @@ class AiAgentScript(
         return true
     }
 
-    override suspend fun execute(
+    private suspend fun run(
         configuration: AgentConfiguration,
         provider: ComponentProvider,
         statusUpdate: suspend (message: String) -> Unit,
@@ -385,7 +405,7 @@ class AiAgentScript(
     }
 
     private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, body: String) {
-        val goal = config.goal()
+        val goal = runCatching { config.goal() }.getOrDefault("") // unset on the host: see validate
         val title = "AI agent: " + if (goal.length > 60) goal.take(60) + "…" else goal
         // Plain Telegram text (no parse mode): Cereal's default Markdown drops a message with an unpaired `_` or `*`, e.g. in a URL.
         provider.notification().sendNotification(Notification(title, body, telegramMessage = TelegramMessage(text = body)))
@@ -396,8 +416,9 @@ class AiAgentScript(
         val slots = config.secretSlots()
         val errors =
             listOfNotNull(
-                goalError(config.goal()),
-                startUrlError(config.startUrl()),
+                // The host throws for a required item with no value, and a throw from onStart reaches the user without its message.
+                goalError(runCatching { config.goal() }.getOrNull()),
+                startUrlError(runCatching { config.startUrl() }.getOrNull()),
                 apiKeyError(config.provider(), config.apiKey()?.reveal()),
                 modelError(config.provider(), config.model()),
                 serverUrlError(config.provider(), config.baseUrl()),

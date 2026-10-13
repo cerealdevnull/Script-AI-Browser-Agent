@@ -74,6 +74,23 @@ class ConfigValidationTest {
             assertTrue(model.requests.isEmpty())
         }
 
+    @Test
+    fun `a required item the host has no value for is reported as missing`() =
+        runBlocking {
+            // The host's config proxy throws for a non-nullable item with no value, instead of returning "".
+            val unset =
+                object : AgentConfiguration by TestConfig() {
+                    override fun goal(): String = throw RuntimeException("No value found for configuration method 'goal'")
+
+                    override fun startUrl(): String = throw RuntimeException("No value found for configuration method 'startUrl'")
+                }
+
+            val result = Host().run(AiAgentScript({ ScriptedModel() }, tempProfiles()), unset)
+
+            assertIs<ExecutionResult.Error>(result)
+            assertEquals("Fix these in the task settings: Goal is required. Start URL is required.", result.message)
+        }
+
     /** An invalid config ends with Error and a notification, and makes no model call. */
     private fun assertRejected(config: TestConfig, error: String) =
         runBlocking {

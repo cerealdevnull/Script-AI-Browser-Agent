@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.runBlocking
 import java.security.MessageDigest
 import java.time.Clock
@@ -224,6 +225,63 @@ class RepeatTest {
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, model.requests.size, "the relaunched Chrome replays")
         }
+    }
+
+    private fun price(text: String) {
+        site.pages["product.html"] = javaClass.getResource("/fixtures/product.html")!!.readText().replace("Price: \$14.15", text)
+    }
+
+    private fun below(request: ModelRequest, priceText: String, expected: String = "10", decimal: String = ".") =
+        """{"goal_met": false, "summary": "Not below.", "readouts": null,
+            "check": {"ref": "${request.textRef("StaticText", priceText)}", "condition": "below", "expected": "$expected", "decimal": "$decimal"}}"""
+
+    @Test
+    fun `a learned price threshold replays with no model calls and notifies when the price drops below it`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", below(it, "Price: \$14.15"))) },
+            )
+
+        task(model, config(goal = "Notify me when the price is below \$10")) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            val check = Json.parseToJsonElement(cache(goal = "Notify me when the price is below \$10")!!).jsonObject.getValue("check").jsonObject
+            assertEquals("below", check.getValue("condition").jsonPrimitive.content)
+            assertEquals(".", check.getValue("decimal").jsonPrimitive.content)
+
+            repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
+            price("Price: \$9.99")
+            assertIs<ExecutionResult.Success>(execute())
+            assertEquals(2, model.requests.size, "replays made no model request")
+        }
+    }
+
+    @Test
+    fun `a numeric Check on an element with two numbers, or with a non-plain expected, is rejected with what to fix`() {
+        price("Was \$20, now \$14.15")
+        site.pages["product.html"] = site.pages["product.html"]!!.replace("In stock", "Out of stock")
+        lateinit var first: ModelRequest // finish errors carry no snapshot: later finishes use this one's refs
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                {
+                    first = it
+                    listOf(call("finish", below(it, "Was \$20, now \$14.15")))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("Check: <page_content>Was \$20, now \$14.15</page_content> holds 2 numbers; pick a ref showing only the current price" in error, error)
+                    listOf(call("finish", below(first, "Was \$20, now \$14.15", expected = "\$10")))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("Check: below needs expected as a plain number" in error, error)
+                    listOf(call("finish", notMet(first)))
+                },
+            )
+
+        task(model, config(goal = "Notify me when the price is below \$10")) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        assertEquals(4, model.requests.size)
     }
 
     @Test

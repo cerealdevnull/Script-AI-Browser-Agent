@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><title>Re-rendered button</title></head>
+<body>
+<h1>Claw Hammer</h1>
+<div id="buy"><button>Add to cart</button></div>
+<p id="cart">Cart: empty</p>
+<script>
+  // Like a framework re-render: the button is replaced by an identical new node, after the agent's snapshot.
+  const copies = Number(new URLSearchParams(location.search).get('copies') || 1);
+  const render = () => {
+    const buy = document.getElementById('buy');
+    buy.replaceChildren();
+    for (let i = 0; i < copies; i++) {
+      const b = document.createElement('button');
+      b.textContent = 'Add to cart';
+      b.onclick = () => { document.getElementById('cart').textContent = 'Cart: 1 item'; };
+      buy.append(b);
+    }
+  };
+  render();
+  setTimeout(render, 2000);
+</script>
+</body>
+</html>

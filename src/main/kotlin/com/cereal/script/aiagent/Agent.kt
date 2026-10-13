@@ -433,8 +433,21 @@ class Agent(
         val expected = (c["expected"] as? JsonPrimitive)?.contentOrNull
         if (condition !in Check.CONDITIONS) return null to "Check: condition must be one of ${Check.CONDITIONS.joinToString()}"
         if (condition.startsWith("text") && expected.isNullOrBlank()) return null to "Check: $condition needs expected text"
+        val decimal = (c["decimal"] as? JsonPrimitive)?.contentOrNull
+        val numeric = condition in Check.NUMERIC
+        if (numeric && decimal != "," && decimal != ".") return null to "Check: $condition needs decimal \",\" or \".\" (the page's decimal separator)"
+        if (numeric && !PLAIN_NUMBER.matches(expected.orEmpty())) return null to "Check: $condition needs expected as a plain number like 50 or 119.99"
+        if (!numeric && decimal != null) return null to "Check: decimal is only for below / atMost / above / atLeast; set it to null"
         return try {
-            val check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected)
+            val check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected, decimal)
+            if (numeric) {
+                val text = browser.matches(Fingerprint(check.fingerprint)).singleOrNull()?.text
+                val count = text?.let { Check.numbers(it, decimal!!).size }
+                if (count != null && count != 1) {
+                    // Page text reaches the model only inside <page_content>.
+                    return null to "Check: <page_content>$text</page_content> holds $count numbers; pick a ref showing only the current price"
+                }
+            }
             when (check.evaluate(browser)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
@@ -682,6 +695,7 @@ class Agent(
                 "Use refs from the latest snapshot."
         private val WHITESPACE = Regex("\\s+")
         private val TEXT_REF = Regex("t\\d+")
+        private val PLAIN_NUMBER = Regex("\\d+(\\.\\d+)?")
         private const val MAX_WAIT_SECONDS = 10
 
         // ponytail: URL path + title keywords; a settings page under an unusual name isn't recognised. Sign-in and
@@ -760,7 +774,9 @@ class Agent(
                         "readouts: values the user asked for, each a label, the [tN] (or [n]) ref showing it and its exact " +
                         "text as value, or null; check: how to tell later, without you, whether the condition holds: the [tN] " +
                         "(or [n]) ref of one element and a condition (textContains / textAbsent with expected text, enabled, " +
-                        "exists; expected null for the last two). It must agree with goal_met now. Required in Repeat mode, else may be null.",
+                        "exists; expected null for the last two; or below / atMost / above / atLeast with expected as a plain number " +
+                        "(50, 119.99) and decimal set to the page's decimal separator (, or .); the element's text must show exactly " +
+                        "one number; decimal null otherwise). It must agree with goal_met now. Required in Repeat mode, else may be null.",
                     schema(
                         "goal_met" to "boolean",
                         "summary" to "string",
@@ -772,7 +788,7 @@ class Agent(
                                 }
                                 put("items", schema("label" to "string", "ref" to "string", "value" to "string"))
                             },
-                        "check" to nullable(schema("ref" to "string", "condition" to "string", "expected" to nullable("string"))),
+                        "check" to nullable(schema("ref" to "string", "condition" to "string", "expected" to nullable("string"), "decimal" to nullable("string"))),
                     ),
                 ),
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),

@@ -221,7 +221,17 @@ internal class AgentScript(
         if (unverifiedMet) log.warn(scrubber.forLog("goal_met true was not verified by a Check: treated as not met"))
         val outcome = if (unverifiedMet) Outcome.Finished(false, ran.summary, ran.steps, ran.readouts, verified = false) else ran
         // The current tab's URL at the end of the run, unless it held a secret; a dead Chrome gets no link.
-        report.url = pageLink(withTimeoutOrNull(5_000) { runCatching { browser.url() }.getOrNull() }, scrubber)
+        val url =
+            withTimeoutOrNull(5_000) {
+                try {
+                    browser.url()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        report.url = pageLink(url, scrubber)
         // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
         // ponytail: splits at the first ". " so "e.g. " cuts early; ask the model for a separate answer field if that bites.
         val answer =

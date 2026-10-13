@@ -1,0 +1,197 @@
+package com.cereal.script.aiagent
+
+import com.cereal.sdk.ExecutionResult
+import kotlinx.coroutines.runBlocking
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+/** Tabs the agent's own action opens are followed (the current tab), and it gets back when they close. */
+class PopupTest {
+    private val site = FixtureServer()
+    private val host = Host()
+    private val profiles = tempProfiles()
+
+    init {
+        site.pages["index.html"] =
+            """<html><body><h1>Shop</h1>
+            <a href="product.html" target="_blank">Long Nose Pliers</a>
+            <button onclick="setTimeout(() => window.open('product.html'), 1000)">Open later</button>
+            <button onclick="window.open('closing.html')">Sign in</button>
+            </body></html>"""
+        site.pages["closing.html"] = """<html><body><h1>Signing in</h1><script>setTimeout(() => window.close(), 1500)</script></body></html>"""
+    }
+
+    @AfterTest
+    fun tearDown() = site.close()
+
+    private fun config(runMode: RunMode = RunMode.Once, start: String = "") =
+        TestConfig(goal = GOAL, startUrl = site.url(start), runMode = runMode, repeatInterval = 7)
+
+    private fun task(
+        model: ModelClient,
+        config: TestConfig = config(),
+        block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
+    ) = runBlocking {
+        // Chrome blocks a popup no click opened; a user who allowed popups on a site lets it open tabs on load.
+        val allowPopups: suspend (java.nio.file.Path, Long) -> Browser = { dir, timeout ->
+            val prefs = dir.resolve("Default/Preferences")
+            java.nio.file.Files.createDirectories(prefs.parent)
+            if (!java.nio.file.Files.exists(prefs)) {
+                java.nio.file.Files.writeString(
+                    prefs,
+                    """{"profile": {"content_settings": {"exceptions": {"popups": {"http://127.0.0.1:*,*": {"setting": 1}}}}}}""",
+                )
+            }
+            Browser.launch(dir, timeout)
+        }
+        val script = AgentScript({ model }, profiles, launchBrowser = allowPopups)
+        val provider = host.create()
+        assertTrue(script.onStart(config, provider))
+        try {
+            block { script.execute(config, provider) {} }
+        } finally {
+            script.onFinish(config, provider)
+        }
+    }
+
+    private fun click(role: String, name: String): suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref(role, name)}}""")) }
+
+    private val met: suspend (ModelRequest) -> List<ToolCall> = {
+        val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "textContains", "expected": "In stock"}"""
+        listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": null, "check": $check}"""))
+    }
+
+    @Test
+    fun `a target=_blank link is followed into the new tab`() {
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                {
+                    assertTrue("Now in a new tab: ${site.url("product.html")}" in it.lastText, it.lastText)
+                    met(it)
+                },
+            )
+        task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        assertTrue(host.logs.any { "Now in a new tab: ${site.url("product.html")}" in it }, host.logs.joinToString("\n"))
+    }
+
+    @Test
+    fun `a window_open delayed by 1 s is followed on the next snapshot`() {
+        val model =
+            ScriptedModel(
+                click("button", "Open later"),
+                { listOf(call("wait", """{"seconds": 1}""")) },
+                {
+                    assertTrue("Now in a new tab: ${site.url("product.html")}" in it.lastText, it.lastText)
+                    met(it)
+                },
+            )
+        task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+    }
+
+    @Test
+    fun `a tab the start page opens on load is ignored`() {
+        site.pages["onload.html"] = """<html><body><a href="product.html">Long Nose Pliers</a><script>window.open('ad.html')</script></body></html>"""
+        site.pages["ad.html"] = """<html><body><h1>Ad</h1></body></html>"""
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                {
+                    assertTrue("new tab" !in it.lastText && "url: ${site.url("product.html")}" in it.lastText, it.lastText)
+                    met(it)
+                },
+            )
+        task(model, config(start = "onload.html")) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+        assertTrue("/ad.html" in site.requested, "the site did open its tab")
+    }
+
+    @Test
+    fun `a popup that closes itself returns to the tab that opened it`() {
+        val model =
+            ScriptedModel(
+                click("button", "Sign in"),
+                {
+                    assertTrue("Now in a new tab: ${site.url("closing.html")}" in it.lastText, it.lastText)
+                    listOf(call("wait", """{"seconds": 2}"""))
+                },
+                {
+                    assertTrue("That tab closed; back on ${site.url("")}" in it.lastText, it.lastText)
+                    click("link", "Long Nose Pliers")(it)
+                },
+                { listOf(call("read_page")) },
+                met,
+            )
+        task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+    }
+
+    @Test
+    fun `go_back on a followed tab closes it and returns to the opener`() {
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                { listOf(call("go_back")) },
+                {
+                    assertTrue("That tab closed; back on ${site.url("")}" in it.lastText, it.lastText)
+                    assertTrue("[1] link \"Long Nose Pliers\"" in it.lastText, it.lastText)
+                    listOf(call("fail", """{"reason": "done"}"""))
+                },
+            )
+        task(model) { execute -> execute() }
+        assertEquals(3, model.requests.size)
+    }
+
+    private fun stock(text: String) {
+        site.pages["product.html"] = javaClass.getResource("/fixtures/product.html")!!.readText().replace("In stock", text)
+    }
+
+    @Test
+    fun `a learned run through a popup replays with 0 model calls`() {
+        stock("Out of stock")
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                {
+                    val check = """{"ref": "${it.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}"""
+                    listOf(call("finish", """{"goal_met": false, "summary": "Out of stock.", "readouts": null, "check": $check}"""))
+                },
+            )
+        task(model, config(RunMode.Repeat)) { execute ->
+            assertIs<ExecutionResult.Loop>(execute())
+            assertIs<ExecutionResult.Loop>(execute())
+            stock("In stock")
+            assertIs<ExecutionResult.Success>(execute())
+        }
+        assertEquals(2, model.requests.size, "the replays made no model call")
+    }
+
+    @Test
+    fun `each goal run starts with the tabs it followed earlier closed`() {
+        // Each open product tab answers the start page's ping, so the start page shows how many there are.
+        stock("In stock")
+        site.pages["product.html"] = site.pages["product.html"]!!.replace(
+            "</body>",
+            "<script>const c = new BroadcastChannel('tabs'); c.onmessage = () => c.postMessage('pong')</script></body>",
+        )
+        site.pages["index.html"] =
+            """<html><body><a href="product.html" target="_blank">Long Nose Pliers</a><p id="n">0 other tabs</p>
+            <script>let n = 0; const c = new BroadcastChannel('tabs');
+            c.onmessage = () => document.getElementById('n').textContent = ++n + ' other tabs'; c.postMessage('ping')</script></body></html>"""
+        val run: Array<suspend (ModelRequest) -> List<ToolCall>> =
+            arrayOf(
+                { listOf(call("read_page")) },
+                click("link", "Long Nose Pliers"),
+                met,
+            )
+        val model = ScriptedModel(*run, *run, *run)
+        task(model) { execute -> repeat(3) { assertIs<ExecutionResult.Success>(execute()) } }
+        val third = model.requests[7].lastText
+        assertTrue("0 other tabs" in third, third)
+    }
+
+    companion object {
+        const val GOAL = "Notify me when Long Nose Pliers is in stock"
+    }
+}

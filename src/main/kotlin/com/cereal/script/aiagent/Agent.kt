@@ -137,6 +137,7 @@ class Agent(
     /** Models that answered a step with no known price; [cost] counts only the priced steps. */
     val unpricedModels: Set<String?> get() = unpriced
     private var finishRejections = 0
+    private var earlierFalse: String? = null // the summary of a rejected finish that said goal_met false
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
     private val recorded = mutableListOf<Step>()
@@ -161,6 +162,7 @@ class Agent(
                 if (resume == null) {
                     status("Opening ${hostOf(startUrl) ?: startUrl}")
                     log("opening $startUrl")
+                    browser.reset()
                     browser.navigate(startUrl)
                 }
                 lastUrl = browser.url()
@@ -172,7 +174,7 @@ class Agent(
             Message.User(
                 scrubber.forModel(
                     "Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() +
-                        resume.orEmpty() + "\n" + pageResult(current),
+                        resume.orEmpty() + "\n" + pageResult(current, follow = resume != null),
                 ),
             )
         while (true) {
@@ -235,13 +237,17 @@ class Agent(
                     "finish" -> {
                         val goalMet = call.args.bool("goal_met")
                         val (readouts, errors) = readouts(call.args["readouts"])
-                        val (check, checkError) = check(call.args["check"], goalMet)
+                        // A rejected false never turns true: the model must fix the Check, not its answer.
+                        val flipped = goalMet && earlierFalse != null
+                        val (check, checkError) = if (flipped) null to FLIPPED else check(call.args["check"], goalMet)
                         checkError?.let { errors += it }
                         if (errors.isEmpty() || finishRejections >= MAX_FINISH_RETRIES) {
                             errors.forEach { log("Not verified after $MAX_FINISH_RETRIES retries, nothing cached: $it") }
+                            if (flipped) return Outcome.Finished(false, earlierFalse!!, steps, readouts, verified = false, recorded = recorded.toList())
                             val verified = errors.isEmpty()
                             return Outcome.Finished(goalMet, call.args.str("summary"), steps, readouts, verified, check.takeIf { verified }, recorded.toList())
                         }
+                        if (!goalMet) earlierFalse = call.args.str("summary")
                         finishRejections++
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
                         continue
@@ -459,7 +465,11 @@ class Agent(
             when (check.evaluate(browser)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
-                else -> null to "Check: it is ${!goalMet} on the live page, but goal_met is $goalMet"
+                else ->
+                    null to
+                        "Check: it is ${!goalMet} on the live page now, but you say the goal is ${if (goalMet) "met" else "not met"}. " +
+                        "A check must be true exactly when the goal is met: pick a condition or element that is $goalMet now " +
+                        if (goalMet) "(e.g. textContains instead of textAbsent)." else "(e.g. textAbsent instead of textContains)."
             }
         } catch (e: CancellationException) {
             throw e
@@ -506,10 +516,12 @@ class Agent(
             try {
                 status("Opening ${hostOf(startUrl) ?: startUrl}")
                 try {
+                    browser.reset()
                     browser.navigate(startUrl)
                 } catch (e: PageLoadException) {
                     return startFailed(e)
                 }
+                browser.follow(switch = false)
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
@@ -599,6 +611,7 @@ class Agent(
      */
     private suspend fun act(call: ToolCall): ToolResult {
         val args = call.args
+        if (call.name != "read_page" && browser.tabClosed()) return ToolResult(call.id, pageResult("not run"), isError = true)
         val text =
             when (call.name) {
                 "read_page" -> pageResult("ok")
@@ -701,11 +714,15 @@ class Agent(
     private fun secretsNote() =
         if (secrets.isEmpty()) "" else "Secrets you can type with type_secret (by name): ${secrets.keys.joinToString()}\n"
 
-    private suspend fun pageResult(prefix: String) =
-        "$prefix\nurl: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    /** [follow] false: the start page was just opened, so tabs it opened by itself are not followed. */
+    private suspend fun pageResult(prefix: String, follow: Boolean = true): String {
+        val tab = browser.follow(follow)?.also(log)?.let { "$it\n" }.orEmpty()
+        return "$prefix\n${tab}url: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    }
 
     companion object {
         private const val MAX_FINISH_RETRIES = 2
+        private const val FLIPPED = "goal_met was false; change the check, not goal_met. If you misread the page, call fail."
         private const val STUCK_REPEATS = 3
         private const val REPEATING =
             "error: you are repeating the same action ($STUCK_REPEATS times on this page, same target and arguments). " +
@@ -731,9 +748,11 @@ class Agent(
             Elements you can act on carry a [ref] number; refs are only valid for the most recent snapshot.
             Static text, cells and headings carry a read-only [tN] ref: only finish's readouts accept those.
             Every action returns a fresh snapshot, so you rarely need read_page.
+            An Iframe marked "not visible" can't be read or used: its content is not in the snapshot.
             When the goal is achieved, or you have determined that it cannot be met, call finish with goal_met and a
             short summary for the user. Report only what the page shows; never guess values. To report values the user
             asked for, add readouts: a label and the ref and exact text of the element showing each value.
+            If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all.
             If you cannot make progress, call fail with the reason.
             """.trimIndent()
 
@@ -784,7 +803,7 @@ class Agent(
                 ToolDef("select", "Choose the option with this visible text (or value) in the select with this ref.", schema("ref" to "integer", "option" to "string")),
                 ToolDef("scroll", "Scroll the page; direction: up or down. Snapshots already cover the whole page, so only for lazy-loaded content.", schema("direction" to "string")),
                 ToolDef("navigate", "Open an http(s) URL on an allowed domain in the tab.", schema("url" to "string")),
-                ToolDef("go_back", "Go back to the previous page.", schema()),
+                ToolDef("go_back", "Go back to the previous page. In a new tab with no earlier page, it closes the tab and returns to the one that opened it.", schema()),
                 ToolDef("wait", "Wait this many seconds (1-10) for the page to update.", schema("seconds" to "integer")),
                 ToolDef("screenshot", "Look at the visible part of the page as an image. Fallback only, when read_page isn't enough.", schema()),
                 ToolDef(

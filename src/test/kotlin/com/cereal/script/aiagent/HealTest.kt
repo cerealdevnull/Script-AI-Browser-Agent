@@ -39,7 +39,7 @@ class HealTest {
         config: TestConfig = config(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AiAgentScript({ model }, profiles)
+        val script = AgentScript({ model }, profiles)
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {

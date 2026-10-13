@@ -21,7 +21,7 @@ class ToolsTest {
     private fun run(model: ScriptedModel, startPath: String) =
         runBlocking {
             host.run(
-                AiAgentScript({ model }, tempProfiles()),
+                AgentScript({ model }, tempProfiles()),
                 TestConfig(goal = "x", startUrl = site.url(startPath), secrets = listOf("email" to Secret("jane@example.com"))),
             )
         }

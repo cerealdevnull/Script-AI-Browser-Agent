@@ -41,7 +41,7 @@ class OpenAiCompatibleGoalTest {
         val config =
             TestConfig(provider = Provider.Custom, baseUrl = api.url("/v1").toString(), apiKey = null, model = "llama3", startUrl = site.url())
 
-        val result = runBlocking { host.run(AiAgentScript(profilesDir = tempProfiles()), config) }
+        val result = runBlocking { host.run(AgentScript(profilesDir = tempProfiles()), config) }
 
         assertIs<ExecutionResult.Success>(result)
         assertEquals("Long Nose Pliers is in stock.\nCost: unknown (no price for llama3)", host.notifications.single().message)

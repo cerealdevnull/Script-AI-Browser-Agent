@@ -19,7 +19,13 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
 
-class AiAgentScript(
+/**
+ * The script the host runs. The host builds it with kotlin-reflect, `constructors.first().call()`, which fails on a
+ * constructor with parameters even when they all have defaults. So: a single no-arg constructor; the seams live in [AgentScript].
+ */
+class AiAgentScript : Script<AgentConfiguration> by AgentScript()
+
+internal class AgentScript(
     private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
     private val pageLoadTimeoutMs: Long = 60_000,
@@ -73,14 +79,17 @@ class AiAgentScript(
         statusUpdate: suspend (message: String) -> Unit,
     ): ExecutionResult = logged(provider) { run(configuration, provider, statusUpdate) }
 
-    // The host shows an unexpected exception as "The script failed without error message.": log what it was.
+    // The host shows an unexpected exception as "The script failed without error message." and keeps the trace to
+    // itself: log it, and print it to stderr too (the mock flavor's logger is a no-op; a release keeps Logs/stderr.log).
     private suspend fun <T> logged(provider: ComponentProvider, block: suspend () -> T): T =
         try {
             block()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            provider.logger().error(scrubber?.forLog(e.toString()) ?: e.toString())
+            val scrub = { text: String -> scrubber?.forLog(text) ?: text }
+            System.err.println("AI Browser Agent: " + scrub(e.stackTraceToString()))
+            provider.logger().error(scrub(e.toString()))
             throw e
         }
 

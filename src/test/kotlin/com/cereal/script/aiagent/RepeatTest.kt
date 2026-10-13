@@ -54,7 +54,7 @@ class RepeatTest {
         clock: Clock = Clock.systemDefaultZone(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AiAgentScript({ model }, profiles, clock = clock)
+        val script = AgentScript({ model }, profiles, clock = clock)
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {

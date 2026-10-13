@@ -16,7 +16,7 @@ class StatusLineTest {
     fun tearDown() = site.close()
 
     private fun run(model: ModelClient, config: TestConfig = TestConfig(startUrl = site.url())) =
-        runBlocking { host.run(AiAgentScript({ model }, tempProfiles()), config) }
+        runBlocking { host.run(AgentScript({ model }, tempProfiles()), config) }
 
     private val finish: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) }
 
@@ -83,7 +83,7 @@ class StatusLineTest {
         val config = TestConfig(startUrl = site.url(), runMode = RunMode.Repeat, repeatInterval = 7)
         val statuses = mutableListOf<String>()
         runBlocking {
-            val script = AiAgentScript({ model }, tempProfiles())
+            val script = AgentScript({ model }, tempProfiles())
             val provider = host.create()
             script.onStart(config, provider)
             try {

@@ -338,8 +338,21 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     private suspend fun settle() = loading {}
 
-    /** Runs [action] and waits for the page to load: [PageLoadException] on a timeout or a Chrome network error page. */
+    /**
+     * Runs [action] and waits for the page to load: [PageLoadException] on a timeout or a Chrome network error page.
+     * A tab that closed meanwhile (a popup closing itself) has nothing to load: the next [follow] moves off it.
+     */
     private suspend fun loading(action: suspend () -> Unit) {
+        try {
+            loadingIn(action)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!tabClosed()) throw e
+        }
+    }
+
+    private suspend fun loadingIn(action: suspend () -> Unit) {
         withTimeoutOrNull(pageLoadTimeoutMs) {
             action()
             delay(300)

@@ -21,7 +21,7 @@ class PopupTest {
             <button onclick="setTimeout(() => window.open('product.html'), 1000)">Open later</button>
             <button onclick="window.open('closing.html')">Sign in</button>
             </body></html>"""
-        site.pages["closing.html"] = """<html><body><h1>Signing in</h1><script>setTimeout(() => window.close(), 500)</script></body></html>"""
+        site.pages["closing.html"] = """<html><body><h1>Signing in</h1><script>setTimeout(() => window.close(), 1500)</script></body></html>"""
     }
 
     @AfterTest
@@ -106,6 +106,41 @@ class PopupTest {
             )
         task(model, config(start = "onload.html")) { execute -> assertIs<ExecutionResult.Success>(execute()) }
         assertTrue("/ad.html" in site.requested, "the site did open its tab")
+    }
+
+    @Test
+    fun `a popup that closes itself returns to the tab that opened it`() {
+        val model =
+            ScriptedModel(
+                click("button", "Sign in"),
+                {
+                    assertTrue("Now in a new tab: ${site.url("closing.html")}" in it.lastText, it.lastText)
+                    listOf(call("wait", """{"seconds": 2}"""))
+                },
+                {
+                    assertTrue("That tab closed; back on ${site.url("")}" in it.lastText, it.lastText)
+                    click("link", "Long Nose Pliers")(it)
+                },
+                { listOf(call("read_page")) },
+                met,
+            )
+        task(model) { execute -> assertIs<ExecutionResult.Success>(execute()) }
+    }
+
+    @Test
+    fun `go_back on a followed tab closes it and returns to the opener`() {
+        val model =
+            ScriptedModel(
+                click("link", "Long Nose Pliers"),
+                { listOf(call("go_back")) },
+                {
+                    assertTrue("That tab closed; back on ${site.url("")}" in it.lastText, it.lastText)
+                    assertTrue("[1] link \"Long Nose Pliers\"" in it.lastText, it.lastText)
+                    listOf(call("fail", """{"reason": "done"}"""))
+                },
+            )
+        task(model) { execute -> execute() }
+        assertEquals(3, model.requests.size)
     }
 
     companion object {

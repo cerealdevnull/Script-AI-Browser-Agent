@@ -40,6 +40,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     private var names: Map<Int, String> = emptyMap() // ref -> role "name"
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
     private var frameOf: Map<Int, Frame> = emptyMap() // backendDOMNodeId -> its frame, for nodes inside a frame
+    private var scrub: (String) -> String = { it } // the latest snapshot's, so a re-resolved name matches [names]
 
     /** Bumped by each [snapshot] whose `[n]` refs point at other nodes than before: older `[n]` refs are stale. */
     var refsVersion = 0
@@ -157,6 +158,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         val newTextRefs = mutableMapOf<String, Int>()
         val newFrameOf = mutableMapOf<Int, Frame>()
         val out = StringBuilder()
+        this.scrub = scrub
         val pageSite = hostOf(url())?.let(::registrableDomain)
         var frames: List<Frame>? = null
 
@@ -178,7 +180,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         suspend fun walk(byId: Map<String, Accessibility.AXNode>, id: String, depth: Int, parentName: String, frame: Frame?) {
             val node = byId[id] ?: return
             val role = node.role.text()
-            val name = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
+            val name = name(node)
             var childDepth = depth
             if (!node.ignored && role !in SKIP && !(role == "StaticText" && (name.isEmpty() || name == parentName))) {
                 out.append("  ".repeat(depth))
@@ -300,8 +302,13 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     /** Where an action's target is, for replay: its `role "name"` plus an xpath fallback (opaque JSON for [refFor]). */
     suspend fun stepTarget(ref: Int): String {
-        val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
-        val xpath = (tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true).result.value as JsonPrimitive).content
+        val xpath =
+            reresolving(ref) {
+                val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
+                val result = tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true)
+                result.exceptionDetails?.let { error(it.exception?.description ?: it.text) }
+                (result.result.value as JsonPrimitive).content
+            }
         return withFrame(JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString(), backendId(ref))
     }
 
@@ -349,11 +356,36 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     private fun backendId(ref: Int) = refs[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
 
-    private suspend fun element(ref: Int): DefaultElement {
-        val backendId = backendId(ref)
-        tab.dom.scrollIntoViewIfNeeded(backendNodeId = backendId)
-        return DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
-    }
+    private suspend fun element(ref: Int): DefaultElement =
+        reresolving(ref) {
+            val backendId = backendId(ref)
+            tab.dom.scrollIntoViewIfNeeded(backendNodeId = backendId)
+            DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
+        }
+
+    /**
+     * Runs [block] (which must not send input to the page); when [ref]'s node was re-rendered ("Node is detached"),
+     * points [ref] at the one live element with the same `role "name"` and runs it once more. No unique match: the
+     * error stands (never a guess). Other refs keep their nodes, so [refsVersion] stays.
+     */
+    private suspend fun <T> reresolving(ref: Int, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val name = names[ref]
+            // ponytail: only top-document refs are re-resolved; a re-rendered node inside a frame stays a stale-ref error.
+            if (name == null || DETACHED !in e.message.orEmpty() || refs[ref] in frameOf) throw e
+            val live =
+                tab.accessibility.getFullAXTree().nodes.filter {
+                    !it.ignored && it.backendDOMNodeId != null && it.role.text() in INTERACTIVE && "${it.role.text()} \"${name(it)}\"" == name
+                }
+            refs = refs + (ref to (live.singleOrNull()?.backendDOMNodeId ?: throw e))
+            block()
+        }
+
+    private fun name(node: Accessibility.AXNode) = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
 
     private suspend fun settle() = loading {}
 
@@ -374,6 +406,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     companion object {
         private const val MAX_CHARS = 14_000
+        private const val DETACHED = "Node is detached"
         private val TEXT_INPUT_TYPES = setOf("", "text", "email", "password", "search", "tel", "url")
         private val WHITESPACE = Regex("\\s+")
         private val SENSITIVE = Regex("password|passwd|e-?mail|cc-|card|cvc|cvv|iban")
@@ -407,6 +440,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         """
 
         private const val XPATH_JS = """function() {
+            if (!this.isConnected) throw new Error('$DETACHED from document');
             $JS_HELPERS
             return xpath(this);
         }"""

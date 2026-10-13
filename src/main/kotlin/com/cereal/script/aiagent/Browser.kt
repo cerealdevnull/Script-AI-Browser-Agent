@@ -4,7 +4,10 @@ import dev.kdriver.cdp.domain.Accessibility
 import dev.kdriver.cdp.domain.accessibility
 import dev.kdriver.cdp.domain.browser
 import dev.kdriver.cdp.domain.dom
+import dev.kdriver.cdp.domain.Page
+import dev.kdriver.cdp.domain.Runtime
 import dev.kdriver.cdp.domain.input
+import dev.kdriver.cdp.domain.page
 import dev.kdriver.cdp.domain.runtime
 import dev.kdriver.core.browser.createBrowser
 import dev.kdriver.core.dom.DefaultElement
@@ -24,6 +27,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
@@ -35,6 +39,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     private var refs: Map<Int, Int> = emptyMap() // ref -> backendDOMNodeId
     private var names: Map<Int, String> = emptyMap() // ref -> role "name"
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
+    private var frameOf: Map<Int, Frame> = emptyMap() // backendDOMNodeId -> its frame, for nodes inside a frame
 
     /** Bumped by each [snapshot] whose `[n]` refs point at other nodes than before: older `[n]` refs are stale. */
     var refsVersion = 0
@@ -147,13 +152,30 @@ class Browser private constructor(private val browser: KBrowser, private val pag
      */
     suspend fun snapshot(scrub: (String) -> String = { it }): String {
         val nodes = tab.accessibility.getFullAXTree().nodes
-        val byId = nodes.associateBy { it.nodeId }
         val newRefs = mutableMapOf<Int, Int>()
         val newNames = mutableMapOf<Int, String>()
         val newTextRefs = mutableMapOf<String, Int>()
+        val newFrameOf = mutableMapOf<Int, Frame>()
         val out = StringBuilder()
+        val pageSite = hostOf(url())?.let(::registrableDomain)
+        var frames: List<Frame>? = null
 
-        fun walk(id: String, depth: Int, parentName: String) {
+        /** The frame behind an `Iframe` node and its tree when it is on the page's site; else appends its label and returns null. */
+        suspend fun iframe(backendId: Int): Pair<Frame, List<Accessibility.AXNode>>? {
+            val all = frames ?: frames().also { frames = it }
+            val child = all.firstOrNull { it.id == tab.dom.describeNode(backendNodeId = backendId).node.frameId }
+            val site = child?.url?.let(::hostOf)
+            val tree =
+                if (child == null || site == null || registrableDomain(site) != pageSite) null
+                else runCatching { tab.accessibility.getFullAXTree(frameId = child.id).nodes }.getOrNull()
+            if (child == null || tree == null) {
+                out.append(" (cross-origin: ${site ?: "?"}, not visible)")
+                return null
+            }
+            return child to tree
+        }
+
+        suspend fun walk(byId: Map<String, Accessibility.AXNode>, id: String, depth: Int, parentName: String, frame: Frame?) {
             val node = byId[id] ?: return
             val role = node.role.text()
             val name = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
@@ -161,6 +183,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             if (!node.ignored && role !in SKIP && !(role == "StaticText" && (name.isEmpty() || name == parentName))) {
                 out.append("  ".repeat(depth))
                 val backendId = node.backendDOMNodeId
+                if (backendId != null && frame != null) newFrameOf[backendId] = frame
                 if (role in INTERACTIVE && backendId != null) {
                     val ref = newRefs.size + 1
                     newRefs[ref] = backendId
@@ -179,17 +202,27 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                     val flag = p.name.name.lowercase()
                     if (flag in FLAGS && p.value.text() == "true") out.append(' ').append(flag)
                 }
+                if (role == "Iframe" && backendId != null) {
+                    // A frame on the page's own site, one level deep, is shown inline; any other one is a placeholder.
+                    val content = if (frame == null) iframe(backendId) else null.also { out.append(" (nested, not visible)") }
+                    out.append('\n')
+                    content?.let { (child, tree) ->
+                        tree.firstOrNull { it.parentId == null }?.let { walk(tree.associateBy { it.nodeId }, it.nodeId, depth + 1, "", child) }
+                    }
+                    return
+                }
                 out.append('\n')
                 childDepth = depth + 1
             }
-            node.childIds?.forEach { walk(it, childDepth, name.ifEmpty { parentName }) }
+            node.childIds?.forEach { walk(byId, it, childDepth, name.ifEmpty { parentName }, frame) }
         }
-        nodes.firstOrNull { it.parentId == null }?.let { walk(it.nodeId, 0, "") }
+        nodes.firstOrNull { it.parentId == null }?.let { walk(nodes.associateBy { it.nodeId }, it.nodeId, 0, "", null) }
         if (newRefs != refs) refsVersion++
         if (newTextRefs != textRefs) textRefsVersion++
         refs = newRefs
         names = newNames
         textRefs = newTextRefs
+        frameOf = newFrameOf
         return if (out.length > MAX_CHARS) out.substring(0, MAX_CHARS) + "\n…(truncated)" else out.toString()
     }
 
@@ -205,23 +238,71 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         val objectId = tab.dom.resolveNode(backendNodeId = backendId).`object`.objectId
         val result = tab.runtime.callFunctionOn(FINGERPRINT_JS, objectId = objectId, returnByValue = true)
         result.exceptionDetails?.let { error("fingerprint failed: ${it.text}") }
-        return Fingerprint((result.result.value as JsonPrimitive).content)
+        return Fingerprint(withFrame((result.result.value as JsonPrimitive).content, backendId))
+    }
+
+    /** [json] plus `frame: {pattern, index}` when [backendId] is inside a frame; absent means the top document. */
+    private fun withFrame(json: String, backendId: Int): String {
+        val frame = frameOf[backendId] ?: return json
+        val loc = JsonObject(mapOf("pattern" to JsonPrimitive(frame.pattern), "index" to JsonPrimitive(frame.index)))
+        return JsonObject(Json.parseToJsonElement(json).jsonObject + ("frame" to loc)).toString()
+    }
+
+    /** The frame a fingerprint's `frame` names, or null when the page has no such frame (a miss). */
+    private suspend fun frameFor(loc: JsonObject): Frame? {
+        val pattern = loc.getValue("pattern").jsonPrimitive.content
+        val index = loc.getValue("index").jsonPrimitive.int
+        return frames().firstOrNull { it.pattern == pattern && it.index == index }
+    }
+
+    /** Evaluates [expression] in the top document, or in an isolated world of the frame [loc] names (not via `contentDocument`); null when that frame is missing. */
+    // ponytail: a new isolated world per call; cache one per frame id if replay ever gets slow.
+    private suspend fun evaluateIn(loc: JsonObject?, expression: String, byValue: Boolean): Runtime.RemoteObject? {
+        val contextId = loc?.let { tab.page.createIsolatedWorld(frameId = (frameFor(it) ?: return null).id, worldName = "aiagent").executionContextId }
+        val result = tab.runtime.evaluate(expression, contextId = contextId, returnByValue = byValue)
+        result.exceptionDetails?.let { error("evaluation failed: ${it.exception?.description ?: it.text}") }
+        return result.result
+    }
+
+    /** The top-level frames (children of the top document) in document order, numbered per URL pattern. */
+    private suspend fun frames(): List<Frame> {
+        val urls = mutableMapOf<String, String>()
+        fun collect(tree: Page.FrameTree) {
+            urls[tree.frame.id] = tree.frame.url
+            tree.childFrames?.forEach(::collect)
+        }
+        collect(tab.page.getFrameTree().frameTree)
+        val pageUrl = url()
+        val root = tab.dom.getDocument(depth = 0).root.nodeId
+        val seen = mutableMapOf<String, Int>()
+        return tab.dom.querySelectorAll(root, "iframe, frame").nodeIds.mapNotNull { nodeId ->
+            val node = tab.dom.describeNode(nodeId = nodeId).node
+            val id = node.frameId ?: return@mapNotNull null
+            // An out-of-process frame may be missing from this tab's frame tree; its src still names its host.
+            val src = node.attributes.orEmpty().chunked(2).firstOrNull { it[0] == "src" }?.getOrNull(1)
+            val url = urls[id] ?: src?.let { runCatching { java.net.URI(pageUrl).resolve(it).toString() }.getOrNull() }.orEmpty()
+            val pattern = urlPattern(url)
+            Frame(id, url, pattern, seen.merge(pattern, 1, Int::plus)!! - 1)
+        }
     }
 
     /** The whitespace-collapsed text of every node [fingerprint] matches on the live page: unique when size is 1. */
     suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).map { it.text }
 
     /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled. */
-    suspend fun matches(fingerprint: Fingerprint): List<Match> =
-        (tab.rawEvaluate("($RESOLVE_JS)(${fingerprint.json})") as JsonArray).map {
+    suspend fun matches(fingerprint: Fingerprint): List<Match> {
+        val frame = Json.parseToJsonElement(fingerprint.json).jsonObject["frame"]?.jsonObject
+        val found = evaluateIn(frame, "($RESOLVE_JS)(${fingerprint.json})", byValue = true)?.value as? JsonArray ?: return emptyList()
+        return found.map {
             Match(it.jsonObject.getValue("text").jsonPrimitive.content, it.jsonObject.getValue("enabled").jsonPrimitive.boolean)
         }
+    }
 
     /** Where an action's target is, for replay: its `role "name"` plus an xpath fallback (opaque JSON for [refFor]). */
     suspend fun stepTarget(ref: Int): String {
         val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
         val xpath = (tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true).result.value as JsonPrimitive).content
-        return JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString()
+        return withFrame(JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString(), backendId(ref))
     }
 
     /**
@@ -231,12 +312,15 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     suspend fun refFor(target: String): Int? {
         val json = Json.parseToJsonElement(target).jsonObject
         val name = json.getValue("name").jsonPrimitive.content
-        val byName = names.filterValues { it == name }.keys
+        val loc = json["frame"]?.jsonObject
+        val frameId = loc?.let { (frameFor(it) ?: return null).id }
+        // Only refs in the step's own frame (none: the top document) count.
+        val byName = names.filter { (ref, n) -> n == name && frameOf[refs.getValue(ref)]?.id == frameId }.keys
         if (byName.size > 1) return null
         byName.singleOrNull()?.let { return it }
         val xpath = JsonPrimitive(json.getValue("xpath").jsonPrimitive.content)
-        val node = tab.runtime.evaluate("document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue")
-        val objectId = node.result.objectId ?: return null
+        val node = evaluateIn(loc, "document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue", byValue = false)
+        val objectId = node?.objectId ?: return null
         val backendId = tab.dom.describeNode(objectId = objectId).node.backendNodeId
         val ref = refs.entries.firstOrNull { it.value == backendId }?.key ?: return null
         // Renamed is fine; another kind of element (a search box where the email field was) is a miss.
@@ -440,6 +524,9 @@ class FormInfo(val inForm: Boolean, val clickSubmits: Boolean, val submitName: S
 /** A page didn't load: a timeout or a network error. Transient: a later attempt may work. */
 /** [message] for the model and the log; [reason] the short cause for the user; [url] the page, unless it's Chrome's error page. */
 class PageLoadException(message: String, val reason: String, val url: String? = null) : Exception(message)
+
+/** An iframe of the top document: [pattern] is [urlPattern] of its [url], [index] its position among those with that pattern. */
+private class Frame(val id: String, val url: String, val pattern: String, val index: Int)
 
 /** A node a [Fingerprint] matched on the live page. */
 class Match(val text: String, val enabled: Boolean)

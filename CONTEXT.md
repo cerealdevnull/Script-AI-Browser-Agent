@@ -10,7 +10,7 @@
 - **escalation**: a goal run on the cheaper first-try model that failed or hit the step cap, restarted as a fresh goal run on the main model.
 - **step**: one LLM call. Replayed actions are not steps.
 - **current tab**: the tab the agent sees and acts in; it moves to a tab the agent's own action opened and back to the opener when that tab closes.
-- **frame**: an iframe on the page's own site whose content is part of the snapshot; any other iframe shows only as a labelled placeholder.
+- **frame**: an in-process iframe (on the page's own site, one level deep) whose content is part of the snapshot and of replay; any other iframe shows only as a labelled placeholder.
 - **snapshot**: the page as an accessibility tree sent to the model, inside a `<page_content>` block.
 - **open popup**: the list or menu an expanded element controls, or an open dialog; the snapshot shows it before the rest of the page.
 - **ref**: `[n]`, the handle of an interactive element in the latest snapshot; older refs are invalid.

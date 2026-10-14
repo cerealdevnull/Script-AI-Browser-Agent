@@ -14,7 +14,7 @@ Describe a goal in plain language and a start URL, and the agent drives your ins
 - Repeat learns the steps on the first run and replays them later without calling the model; if the site changes, the model picks up where replay stopped
 - Dollar and step limits per run and per task; cost is tracked for common Anthropic, OpenAI, Gemini and OpenRouter models, and shown as unknown otherwise
 - Up to three secrets (e.g. email and password) typed into the site on request; the AI never sees their values, and they are removed from logs
-- **On next start** lets you forget the learned steps, or also sign out, when a site changed or the agent keeps doing the wrong thing
+- **Duplicate the task** to start over when a site changed or the agent keeps doing the wrong thing: the copy forgets the learned steps and signs you out
 - Navigation stays on the start URL's domain plus any domains you allow (e.g. a login or payment provider)
 - Visible Chrome window with a separate profile per task, so sign-ins persist between runs
 - Rejects cookie consent banners itself (never accepts all), so no steps or money go to them

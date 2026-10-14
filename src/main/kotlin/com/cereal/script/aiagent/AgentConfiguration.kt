@@ -196,8 +196,9 @@ interface AgentConfiguration : ScriptConfiguration {
         keyName = "onNextStart",
         name = "On next start",
         description =
-            "Use this when the site changed or the agent keeps doing the wrong thing. It acts once, when you change it and start the task. " +
-                "To do it again, pick another option first. Signing out deletes this task's browser data (cookies, saved logins).",
+            "A task's settings can't be changed after it's created, so this has no effect yet. " +
+                "If the site changed or the agent keeps doing the wrong thing, duplicate the task and start the copy: " +
+                "it starts without learned steps and signs you out of the site.",
     )
     fun onNextStart(): OnNextStart = OnNextStart.Keep
 

@@ -542,8 +542,10 @@ private fun keyRejected(config: AgentConfiguration): String {
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
-internal const val FORGET_STEPS = "Pick “Forget learned steps” in On next start, then start the task again."
-internal const val FORGET_AND_SIGN_OUT = "Pick “Forget learned steps and sign out” in On next start, then start the task again."
+// A task's settings can't be edited after it's created, so a fresh start means a duplicate:
+// new task id, no learned steps, clean Chrome profile.
+internal const val FORGET_STEPS = "Duplicate the task and start the copy. The copy starts without learned steps and signs you out of the site."
+internal const val FORGET_AND_SIGN_OUT = FORGET_STEPS
 private const val TASK_ID_KEY = "taskId"
 private const val ON_NEXT_START_KEY = "onNextStart"
 private const val LEARNED_FROM_SCRATCH = "Learned from scratch (reset at start)."

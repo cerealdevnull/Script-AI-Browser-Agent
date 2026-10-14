@@ -577,7 +577,7 @@ class RepeatTest {
 
         assertEquals(5, model.requests.size)
         assertEquals(
-            "Couldn't find something on the page to watch.\nPick “Forget learned steps” in On next start, then start the task again.\nCost: \$0.02",
+            "Couldn't find something on the page to watch.\nDuplicate the task and start the copy. The copy starts without learned steps and signs you out of the site.\nCost: \$0.02",
             host.notifications.last().message,
         )
     }

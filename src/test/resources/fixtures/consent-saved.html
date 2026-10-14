@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><title>News, consent already saved</title></head>
+<body>
+<h1>Today's headline</h1>
+<div id="onetrust-consent-sdk">
+  <div id="onetrust-banner-sdk" style="display:none" role="dialog" aria-label="Cookie consent">
+    <p>We use cookies to improve your experience.</p>
+    <button id="onetrust-accept-btn-handler" onclick="fetch('/accepted'); document.body.insertAdjacentHTML('beforeend', '<p>Cookies accepted</p>'); this.closest('#onetrust-consent-sdk').remove()">Accept All Cookies</button>
+    <button id="onetrust-reject-all-handler" onclick="fetch('/rejected'); document.body.insertAdjacentHTML('beforeend', '<p>Cookies rejected</p>'); this.closest('#onetrust-consent-sdk').remove()">Reject All</button>
+  </div>
+</div>
+</body>
+</html>

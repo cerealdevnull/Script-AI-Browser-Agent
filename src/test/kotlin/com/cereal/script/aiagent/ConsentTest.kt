@@ -64,4 +64,22 @@ class ConsentTest {
             }
         }
     }
+
+    @Test
+    fun `a banner provider with no open banner stops costing a wait once the search for it ends`() {
+        runBlocking {
+            val browser = Browser.launch(tempProfiles())
+            try {
+                browser.navigate(site.url("consent-saved.html")) // a choice saved earlier: the provider loads, its banner stays hidden
+                kotlinx.coroutines.delay(7_000) // autoconsent looks for the banner for ~5 s
+                val start = System.nanoTime()
+                browser.wait(1)
+                val ms = (System.nanoTime() - start) / 1_000_000
+                // wait's own 1 s plus settle's 600 ms of fixed waits; a stuck "busy" would add the 3 s cap.
+                assertTrue(ms < 2_500, "took $ms ms")
+            } finally {
+                browser.close()
+            }
+        }
+    }
 }

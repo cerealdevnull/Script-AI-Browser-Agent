@@ -658,12 +658,13 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             return found.map(e => ({text: text(e), enabled: !e.matches(':disabled') && e.getAttribute('aria-disabled') !== 'true'}));
         }"""
 
-        // Never waits for nothingDetected: a page without a banner costs no wait.
+        // Never waits for nothingDetected: a page without a banner costs no wait. autoconsent leaves cmpDetected in
+        // place when the banner never shows (a choice saved earlier), so that state counts only while it still looks (~5 s).
         private const val CONSENT_STATE_JS = """(() => {
             const c = window.__cerealConsent;
             if (!c) return {busy: false, rejected: []};
             const rejected = c.results.splice(0).filter(r => r.result).map(r => r.cmp);
-            const busy = ['cmpDetected', 'openPopupDetected', 'runningOptOut'].includes(c.state);
+            const busy = ['openPopupDetected', 'runningOptOut'].includes(c.state) || (c.state === 'cmpDetected' && Date.now() - c.since < 6000);
             return {busy, rejected};
         })()"""
 

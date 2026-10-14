@@ -1,6 +1,7 @@
 package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
+import com.cereal.sdk.component.notification.telegram.model.TelegramParseMode
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -52,6 +53,29 @@ class OnceGoalTest {
     }
 
     @Test
+    fun `when finish retries run out after a rejected flip to true, the run ends with the earlier not met`() {
+        var ref = 0
+        val exists = { r: ModelRequest ->
+            if (ref == 0) ref = r.ref("link", "Long Nose Pliers")
+            """{"ref": "$ref", "condition": "exists", "expected": null}"""
+        }
+        val flip = { r: ModelRequest -> listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock.", "check": ${exists(r)}}""")) }
+        val model =
+            ScriptedModel(
+                // The Check holds now, so this not-met finish is rejected; the model then answers met instead.
+                { listOf(call("finish", """{"goal_met": false, "summary": "Long Nose Pliers is out of stock.", "check": ${exists(it)}}""")) },
+                flip,
+                flip,
+            )
+
+        val result = run(model)
+
+        assertIs<ExecutionResult.Success>(result)
+        assertEquals("Long Nose Pliers is out of stock.", result.message)
+        assertTrue(host.notifications.none { "in stock." in it.message }, host.notifications.joinToString { it.message })
+    }
+
+    @Test
     fun `the Once prompt asks for a one-sentence answer first`() {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) })
         run(model)
@@ -67,13 +91,28 @@ class OnceGoalTest {
     }
 
     @Test
-    fun `Telegram gets the message as plain text so a URL with an underscore is not dropped`() {
-        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "See https://shop.test/long_nose_pliers"}""")) }))
+    fun `Telegram and Discord get the result rich, escaped, with the page link, so a URL with an underscore is not dropped`() {
+        run(ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "In stock <b>&</b>. See https://shop.test/long_nose_pliers"}""")) }))
 
         val notification = host.notifications.single()
         val telegram = assertNotNull(notification.telegramMessage)
-        assertEquals(notification.message, telegram.text)
-        assertNull(telegram.parseMode, "no parse mode: Telegram sends it as plain text")
+        assertEquals(TelegramParseMode.HTML, telegram.parseMode)
+        assertTrue(telegram.text.startsWith("✅ <b>In stock &lt;b&gt;&amp;&lt;/b&gt;.</b>\n"), telegram.text)
+        assertTrue("<i>See https://shop.test/long_nose_pliers</i>" in telegram.text, telegram.text)
+        assertTrue("<a href=\"${site.url()}\">Open page</a> · Cost: $0.01" in telegram.text, telegram.text)
+        val embed = notification.discordMessage!!.embeds!!.single()
+        assertEquals(site.url(), embed.url)
+        assertEquals("@here", notification.discordMessage!!.content)
+    }
+
+    @Test
+    fun `a failure before Chrome starts has no page link`() {
+        runBlocking { host.run(AgentScript({ ScriptedModel() }, tempProfiles(), launchBrowser = { _, _ -> error("no Chrome") }), TestConfig(startUrl = site.url())) }
+
+        val notification = host.notifications.single()
+        assertEquals("15158332", notification.discordMessage!!.embeds!!.single().color)
+        assertNull(notification.discordMessage!!.embeds!!.single().url)
+        assertTrue("Open page" !in notification.telegramMessage!!.text)
     }
 
     @Test
@@ -105,5 +144,25 @@ class OnceGoalTest {
 
         assertIs<ExecutionResult.Success>(result)
         assertEquals(2, model.requests.size)
+    }
+
+    @Test
+    fun `a change Check is refused in Once mode`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                {
+                    val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "changed", "expected": null, "decimal": null}"""
+                    listOf(call("finish", """{"goal_met": false, "summary": "In stock.", "readouts": null, "check": $check}"""))
+                },
+                {
+                    val error = it.lastResults.single().text
+                    assertTrue("Check: changed/decreased need Repeat mode" in error, error)
+                    listOf(call("finish", """{"goal_met": false, "summary": "In stock.", "readouts": null, "check": null}"""))
+                },
+            )
+
+        assertIs<ExecutionResult.Success>(run(model))
+        assertEquals(3, model.requests.size)
     }
 }

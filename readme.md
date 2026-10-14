@@ -22,3 +22,9 @@ Spec: [desktop-client#69](https://github.com/Cereal-Automation/desktop-client/is
 * kdriver, OkHttp and kotlinx-serialization are bundled (the host's copies are obfuscated). No vendor LLM SDKs.
 * ProGuard rules live in `proguard-rules/`. `scriptJar` puts the original `AgentConfiguration*` classes back after
   shrinking, because the host reads the config form with kotlin-reflect and ProGuard strips Kotlin metadata.
+* `src/main/resources/autoconsent/` is vendored unmodified from npm (version and sha256 in its `VERSION`); never edit
+  or port it. Our own bridge to it is `consent-glue.js`. To upgrade: replace both files from the new npm package and
+  update `VERSION`.
+
+## Notices
+Includes @duckduckgo/autoconsent v16.43.1 (MPL-2.0), source: https://github.com/duckduckgo/autoconsent

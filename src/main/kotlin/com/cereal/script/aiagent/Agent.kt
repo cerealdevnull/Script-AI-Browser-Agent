@@ -41,7 +41,10 @@ sealed interface Outcome {
         val verified: Boolean = true,
         val check: Check? = null,
         val recorded: List<Step> = emptyList(),
-    ) : Outcome
+    ) : Outcome {
+        /** A change Check holds: [check] carries the new baseline. */
+        val changed get() = goalMet && check?.isChange == true
+    }
 
     /**
      * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
@@ -134,6 +137,7 @@ class Agent(
     /** Models that answered a step with no known price; [cost] counts only the priced steps. */
     val unpricedModels: Set<String?> get() = unpriced
     private var finishRejections = 0
+    private var earlierFalse: String? = null // the summary of a rejected finish that said goal_met false
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
     private var loadFailure: String? = null // tool + args of the last action whose page didn't load
     private val recorded = mutableListOf<Step>()
@@ -158,6 +162,7 @@ class Agent(
                 if (resume == null) {
                     status("Opening ${hostOf(startUrl) ?: startUrl}")
                     log("opening $startUrl")
+                    browser.reset()
                     browser.navigate(startUrl)
                 }
                 lastUrl = browser.url()
@@ -169,7 +174,7 @@ class Agent(
             Message.User(
                 scrubber.forModel(
                     "Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() +
-                        resume.orEmpty() + "\n" + pageResult(current),
+                        resume.orEmpty() + "\n" + pageResult(current, follow = resume != null),
                 ),
             )
         while (true) {
@@ -232,13 +237,17 @@ class Agent(
                     "finish" -> {
                         val goalMet = call.args.bool("goal_met")
                         val (readouts, errors) = readouts(call.args["readouts"])
-                        val (check, checkError) = check(call.args["check"], goalMet)
+                        // A rejected false never turns true: the model must fix the Check, not its answer.
+                        val flipped = goalMet && earlierFalse != null
+                        val (check, checkError) = if (flipped) null to FLIPPED else check(call.args["check"], goalMet)
                         checkError?.let { errors += it }
                         if (errors.isEmpty() || finishRejections >= MAX_FINISH_RETRIES) {
                             errors.forEach { log("Not verified after $MAX_FINISH_RETRIES retries, nothing cached: $it") }
+                            if (flipped) return Outcome.Finished(false, earlierFalse!!, steps, readouts, verified = false, recorded = recorded.toList())
                             val verified = errors.isEmpty()
                             return Outcome.Finished(goalMet, call.args.str("summary"), steps, readouts, verified, check.takeIf { verified }, recorded.toList())
                         }
+                        if (!goalMet) earlierFalse = call.args.str("summary")
                         finishRejections++
                         results += ToolResult(call.id, "finish rejected:\n" + errors.joinToString("\n"), isError = true)
                         continue
@@ -433,12 +442,36 @@ class Agent(
         val expected = (c["expected"] as? JsonPrimitive)?.contentOrNull
         if (condition !in Check.CONDITIONS) return null to "Check: condition must be one of ${Check.CONDITIONS.joinToString()}"
         if (condition.startsWith("text") && expected.isNullOrBlank()) return null to "Check: $condition needs expected text"
+        val decimal = (c["decimal"] as? JsonPrimitive)?.contentOrNull
+        val change = condition in Check.CHANGE
+        if (change && runMode != RunMode.Repeat) return null to "Check: changed/decreased need Repeat mode"
+        if (change && goalMet) return null to "Check: a change Check starts false; set goal_met false"
+        val numeric = condition in Check.NUMERIC || condition == "decreased"
+        if (numeric && decimal != "," && decimal != ".") return null to "Check: $condition needs decimal \",\" or \".\" (the page's decimal separator)"
+        if (condition in Check.NUMERIC && !PLAIN_NUMBER.matches(expected.orEmpty())) return null to "Check: $condition needs expected as a plain number like 50 or 119.99"
+        if (!numeric && decimal != null) return null to "Check: decimal is only for below / atMost / above / atLeast / decreased; set it to null"
         return try {
-            val check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected)
-            when (check.evaluate(browser)) {
+            var check = Check(secretFree(browser.fingerprint(c.str("ref"))).json, condition, expected, decimal)
+            // Resolved once: the change baseline, the number count and the evaluation all read the same match.
+            val matches = browser.matches(Fingerprint(check.fingerprint))
+            val text = matches?.singleOrNull()?.text
+            // A change Check's baseline is the element's text now, read by the script.
+            if (change) check = check.rebased(text ?: "")
+            if (numeric) {
+                val count = text?.let { Check.numbers(it, decimal!!).size }
+                if (count != null && count != 1) {
+                    // Page text reaches the model only inside <page_content>.
+                    return null to "Check: <page_content>$text</page_content> holds $count numbers; pick a ref showing only the current price"
+                }
+            }
+            when (check.evaluate(matches)) {
                 null -> null to "Check: ref ${c.str("ref")} does not match exactly one node"
                 goalMet -> check to null
-                else -> null to "Check: it is ${!goalMet} on the live page, but goal_met is $goalMet"
+                else ->
+                    null to
+                        "Check: it is ${!goalMet} on the live page now, but you say the goal is ${if (goalMet) "met" else "not met"}. " +
+                        "A check must be true exactly when the goal is met: pick a condition or element that is $goalMet now " +
+                        if (goalMet) "(e.g. textContains instead of textAbsent)." else "(e.g. textAbsent instead of textContains)."
             }
         } catch (e: CancellationException) {
             throw e
@@ -485,10 +518,12 @@ class Agent(
             try {
                 status("Opening ${hostOf(startUrl) ?: startUrl}")
                 try {
+                    browser.reset()
                     browser.navigate(startUrl)
                 } catch (e: PageLoadException) {
                     return startFailed(e)
                 }
+                browser.follow(switch = false)
                 browser.snapshot(scrubber::forModel) // refs for step 1; each act() takes the snapshot for the next step
                 for ((i, step) in cache.steps.withIndex()) {
                     at = "step ${i + 1} of ${cache.steps.size} (${step.action})"
@@ -516,9 +551,11 @@ class Agent(
                 place = "the result check"
                 at = "the check"
                 failed = at
+                // Read once: a change Check's new baseline is the very match it was evaluated on.
+                val checkMatches = cache.check?.let { browser.matches(Fingerprint(it.fingerprint)) }
                 val goalMet =
                     cache.check?.let {
-                        it.evaluate(browser) ?: run {
+                        it.evaluate(checkMatches) ?: run {
                             checkMissed = true
                             throw Miss("the check's target does not match exactly one node", "the check's target is gone")
                         }
@@ -532,7 +569,8 @@ class Agent(
                                 ?: throw Miss("readout '${r.label}' does not match exactly one node", "the readout '${r.label}' is gone")
                         Readout(r.label, text, Fingerprint(r.fingerprint))
                     }
-                return Outcome.Finished(goalMet, "", 0, readouts)
+                val moved = cache.check?.takeIf { goalMet && it.isChange }?.rebased(checkMatches!!.single().text)
+                return Outcome.Finished(goalMet, "", 0, readouts, check = moved, recorded = cache.steps)
             } catch (e: Miss) {
                 e
             } catch (e: CancellationException) {
@@ -551,10 +589,20 @@ class Agent(
         recorded += done
         // Step targets are page text: they reach the model only inside <page_content>.
         val steps = done.withIndex().joinToString("") { (i, s) -> "${i + 1}. ${describe(s)}\n" }
-        return run(
-            "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
-                "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>${miss.failed}</page_content>\n",
-        )
+        val healed =
+            run(
+                "Replaying the steps learned in an earlier run missed; continue from the current page.\n" +
+                    "Steps already done:\n<page_content>\n$steps</page_content>\nFailed: <page_content>${miss.failed}</page_content>\n",
+            )
+        // A healed change Check keeps the cached baseline and is evaluated right away.
+        val old = cache.check?.takeIf { it.isChange }
+        val new = (healed as? Outcome.Finished)?.check?.takeIf { it.condition == old?.condition } ?: return healed
+        healed as Outcome.Finished
+        val kept = new.rebased(old!!.expected.orEmpty())
+        val matches = runCatching { browser.matches(Fingerprint(kept.fingerprint)) }.getOrNull()
+        val met = kept.evaluate(matches) == true
+        // Met means exactly one match: the new baseline is the text it was evaluated on.
+        return Outcome.Finished(met, healed.summary, healed.steps, healed.readouts, healed.verified, if (met) kept.rebased(matches!!.single().text) else kept, healed.recorded)
     }
 
     /** A replay miss: [rule] for the log, [failed] for the healing model. */
@@ -566,6 +614,7 @@ class Agent(
      */
     private suspend fun act(call: ToolCall): ToolResult {
         val args = call.args
+        if (call.name != "read_page" && browser.tabClosed()) return ToolResult(call.id, pageResult("not run"), isError = true)
         val text =
             when (call.name) {
                 "read_page" -> pageResult("ok")
@@ -668,11 +717,15 @@ class Agent(
     private fun secretsNote() =
         if (secrets.isEmpty()) "" else "Secrets you can type with type_secret (by name): ${secrets.keys.joinToString()}\n"
 
-    private suspend fun pageResult(prefix: String) =
-        "$prefix\nurl: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    /** [follow] false: the start page was just opened, so tabs it opened by itself are not followed. */
+    private suspend fun pageResult(prefix: String, follow: Boolean = true): String {
+        val tab = browser.follow(follow)?.also(log)?.let { "$it\n" }.orEmpty()
+        return "$prefix\n${tab}url: ${browser.url()}\n<page_content>\n${browser.snapshot(scrubber::forModel)}</page_content>"
+    }
 
     companion object {
         private const val MAX_FINISH_RETRIES = 2
+        private const val FLIPPED = "goal_met was false; change the check, not goal_met. If you misread the page, call fail."
         private const val STUCK_REPEATS = 3
         private const val REPEATING =
             "error: you are repeating the same action ($STUCK_REPEATS times on this page, same target and arguments). " +
@@ -682,6 +735,7 @@ class Agent(
                 "Use refs from the latest snapshot."
         private val WHITESPACE = Regex("\\s+")
         private val TEXT_REF = Regex("t\\d+")
+        private val PLAIN_NUMBER = Regex("\\d+(\\.\\d+)?")
         private const val MAX_WAIT_SECONDS = 10
 
         // ponytail: URL path + title keywords; a settings page under an unusual name isn't recognised. Sign-in and
@@ -697,9 +751,11 @@ class Agent(
             Elements you can act on carry a [ref] number; refs are only valid for the most recent snapshot.
             Static text, cells and headings carry a read-only [tN] ref: only finish's readouts accept those.
             Every action returns a fresh snapshot, so you rarely need read_page.
+            An Iframe marked "not visible" can't be read or used: its content is not in the snapshot.
             When the goal is achieved, or you have determined that it cannot be met, call finish with goal_met and a
             short summary for the user. Report only what the page shows; never guess values. To report values the user
             asked for, add readouts: a label and the ref and exact text of the element showing each value.
+            If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all.
             If you cannot make progress, call fail with the reason.
             """.trimIndent()
 
@@ -750,7 +806,7 @@ class Agent(
                 ToolDef("select", "Choose the option with this visible text (or value) in the select with this ref.", schema("ref" to "integer", "option" to "string")),
                 ToolDef("scroll", "Scroll the page; direction: up or down. Snapshots already cover the whole page, so only for lazy-loaded content.", schema("direction" to "string")),
                 ToolDef("navigate", "Open an http(s) URL on an allowed domain in the tab.", schema("url" to "string")),
-                ToolDef("go_back", "Go back to the previous page.", schema()),
+                ToolDef("go_back", "Go back to the previous page. In a new tab with no earlier page, it closes the tab and returns to the one that opened it.", schema()),
                 ToolDef("wait", "Wait this many seconds (1-10) for the page to update.", schema("seconds" to "integer")),
                 ToolDef("screenshot", "Look at the visible part of the page as an image. Fallback only, when read_page isn't enough.", schema()),
                 ToolDef(
@@ -759,7 +815,11 @@ class Agent(
                         "readouts: values the user asked for, each a label, the [tN] (or [n]) ref showing it and its exact " +
                         "text as value, or null; check: how to tell later, without you, whether the condition holds: the [tN] " +
                         "(or [n]) ref of one element and a condition (textContains / textAbsent with expected text, enabled, " +
-                        "exists; expected null for the last two). It must agree with goal_met now. Required in Repeat mode, else may be null.",
+                        "exists; expected null for the last two; or below / atMost / above / atLeast with expected as a plain number " +
+                        "(50, 119.99) and decimal set to the page's decimal separator (, or .); the element's text must show exactly " +
+                        "one number; decimal null otherwise; or, when the goal is to hear about a change, changed (any change in the " +
+                        "element's text) or decreased (its one number went down, e.g. 'tell me when the price drops'; set decimal) " +
+                        "with expected null: the script stores the current value, and goal_met must be false). It must agree with goal_met now. Required in Repeat mode, else may be null.",
                     schema(
                         "goal_met" to "boolean",
                         "summary" to "string",
@@ -771,7 +831,7 @@ class Agent(
                                 }
                                 put("items", schema("label" to "string", "ref" to "string", "value" to "string"))
                             },
-                        "check" to nullable(schema("ref" to "string", "condition" to "string", "expected" to nullable("string"))),
+                        "check" to nullable(schema("ref" to "string", "condition" to "string", "expected" to nullable("string"), "decimal" to nullable("string"))),
                     ),
                 ),
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),

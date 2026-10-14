@@ -3,13 +3,12 @@ package com.cereal.script.aiagent
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.Script
 import com.cereal.sdk.component.ComponentProvider
-import com.cereal.sdk.component.notification.Notification
-import com.cereal.sdk.component.notification.telegram.model.TelegramMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Clock
@@ -137,6 +136,7 @@ internal class AgentScript(
                 log.error("Chrome could not be started: ${e.message}")
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
+        browser.log = { log.info(scrubber.forLog(it)) }
         val modelId = configuration.modelId()
         val modelPriced = Prices.cost(modelId, Usage(0, 0)) != null
         if (!priceAnnounced && !modelPriced) {
@@ -193,7 +193,7 @@ internal class AgentScript(
                     else -> ""
                 }
         }
-        val outcome =
+        val ran =
             try {
                 // A Repeat run replays only with a Check; a Once run also with Readouts. Otherwise it learns.
                 cache = ReplayCache.parse(provider.preference().getString(key))?.takeIf { it.check != null || (!repeat && it.readouts.isNotEmpty()) }
@@ -201,7 +201,8 @@ internal class AgentScript(
                 learnedMet = cache?.met == true
                 // A learned or healed run rewrites the cache (a heal keeps the steps before the miss: see Agent.replay).
                 (cache?.let { agent.replay(it) } ?: agent.run()).also {
-                    if (it is Outcome.Finished && (!replayed || agent.healed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
+                    // A met change Check also rewrites it on a plain replay: the new value is the next baseline.
+                    if (it is Outcome.Finished && (!replayed || agent.healed || it.changed)) writeCache(provider, key, it, repeat, cache?.check?.takeUnless { agent.checkMissed }) { m -> log.info(scrubber.forLog(m)) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -215,6 +216,22 @@ internal class AgentScript(
                 taskUnpriced += agent.unpricedModels
                 checks++
             }
+        // Repeat: "Goal met" only ever comes from a verified Check; an unverified one is not met and loops quietly.
+        val unverifiedMet = repeat && ran is Outcome.Finished && ran.goalMet && !ran.verified
+        if (unverifiedMet) log.warn(scrubber.forLog("goal_met true was not verified by a Check: treated as not met"))
+        val outcome = if (unverifiedMet) Outcome.Finished(false, ran.summary, ran.steps, ran.readouts, verified = false) else ran
+        // The current tab's URL at the end of the run, unless it held a secret; a dead Chrome gets no link.
+        val url =
+            withTimeoutOrNull(5_000) {
+                try {
+                    browser.url()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        report.url = pageLink(url, scrubber)
         // Once: the summary's first sentence is the headline, the rest leads the details. A replay has no summary.
         // ponytail: splits at the first ". " so "e.g. " cuts early; ask the model for a separate answer field if that bites.
         val answer =
@@ -224,6 +241,7 @@ internal class AgentScript(
                 when (outcome) {
                     is Outcome.Failed -> outcome.reason
                     is Outcome.Stopped -> outcome.reason
+                    is Outcome.Finished if outcome.changed -> if (outcome.check!!.condition == "decreased") "Price dropped" else "Changed"
                     is Outcome.Finished -> answer.firstOrNull()?.ifEmpty { null } ?: if (outcome.goalMet) "Goal met" else "Goal not met"
                     is Outcome.Declined -> outcome.step.declined
                 },
@@ -240,7 +258,7 @@ internal class AgentScript(
         val maxTask = configuration.maxTaskCost()
         if (repeat && !capWarned && taskSpent >= 0.8 * maxTask && taskSpent < maxTask) {
             capWarned = true
-            notify(configuration, provider, "This monitor has spent ${usd(taskSpent)} of its ${usd(maxTask)} limit.\nRaise Max \$ per task to keep it running past ${usd(maxTask)}.")
+            notify(configuration, provider, ResultMessage(Kind.Watching, "This monitor has spent ${usd(taskSpent)} of its ${usd(maxTask)} limit.", "Raise Max \$ per task to keep it running past ${usd(maxTask)}."))
         }
         log.info(
             "run: ${configuration.runMode()}, ${if (agent.healed) "healed" else if (replayed) "replayed" else "learned"}, ${stepCount(agent.steps)}, ${usd(agent.cost)}, $verdict" +
@@ -248,7 +266,7 @@ internal class AgentScript(
         )
         // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
         // A heal is a failed heal: the learned steps no longer fit; a learned run asks for a reworded goal.
-        if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed)) {
+        if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed) && !unverifiedMet) {
             return report.error(NOTHING_TO_WATCH, if (agent.healed) FORGET_STEPS else REWORD, cost = cost())
         }
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
@@ -261,6 +279,7 @@ internal class AgentScript(
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
             return retry(configuration, scrubber.forLog((outcome as Outcome.Failed).unreachable!!), statusUpdate)
         }
+        val total = { "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
         return when (outcome) {
             is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
                 report.error(
@@ -271,29 +290,45 @@ internal class AgentScript(
             is Outcome.Failed -> report.error(verdict, outcome.action, cost())
             is Outcome.Stopped -> report.error(verdict, outcome.action, cost())
             // A No is a normal finish, not an Error; it ends a monitor too.
-            is Outcome.Declined -> report.notify(verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
+            is Outcome.Declined -> report.notify(Kind.NotMet, verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
             // A monitor notifies only on change: a learned run that saved a condition, the first heal in a streak, goal met.
             is Outcome.Finished if repeat && !outcome.goalMet -> {
                 val watching = outcome.check
                 when {
                     watching == null -> {}
                     !replayed ->
-                        notify(
-                            configuration,
-                            provider,
-                            scrubber.forLog("Watching: ${watching.words()}. I'll check every ${every(configuration.repeatInterval())} and notify you when it does. Later checks are free.\n${cost()}"),
+                        report.notify(
+                            Kind.Watching,
+                            scrubber.forLog("Watching: ${watching.words()}. I'll check every ${every(configuration.repeatInterval())} and notify you when it does. Later checks are free."),
+                            cost = cost(),
+                            status = false,
                         )
-                    !healing -> notify(configuration, provider, "The page changed, so I re-learned it for ${spent(agent.cost, agent.unpricedModels)}. Still watching.")
+                    !healing -> report.notify(Kind.Watching, "The page changed, so I re-learned it for ${spent(agent.cost, agent.unpricedModels)}. Still watching.", status = false)
                 }
                 healing = agent.healed
                 ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
             }
+            // A change: tell old → new and keep watching from the new baseline.
+            is Outcome.Finished if outcome.changed -> {
+                val move = "${cut(cache?.check?.expected.orEmpty())} → ${cut(outcome.check!!.expected.orEmpty())}"
+                val readouts = outcome.readouts.map { scrubber.forLog(it.label) to scrubber.forLog(it.text) }
+                report.notify(Kind.Change, verdict, summary = scrubber.forLog(move), readouts = readouts, cost = total())
+                healing = agent.healed
+                ExecutionResult.Loop(verdict, configuration.repeatInterval() * 1000L)
+            }
             is Outcome.Finished -> {
-                val readouts = outcome.readouts.map { scrubber.forLog("${it.label}: ${it.text}") }
+                val readouts = outcome.readouts.map { scrubber.forLog(it.label) to scrubber.forLog(it.text) }
                 val met = (outcome.check ?: cache?.check)?.takeIf { repeat }?.let { scrubber.forLog("Now holds: ${it.words()}") }
-                val total = "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}"
                 val stale = replayed && !outcome.goalMet && learnedMet
-                report.notify(met ?: verdict, FORGET_STEPS.takeIf { stale }, details = answer.drop(1) + readouts + listOfNotNull(learnedFromScratch), cost = if (repeat) total else cost())
+                report.notify(
+                    if (outcome.goalMet) Kind.Met else Kind.NotMet,
+                    met ?: verdict,
+                    FORGET_STEPS.takeIf { stale },
+                    answer.getOrNull(1),
+                    readouts,
+                    listOfNotNull(learnedFromScratch),
+                    cost = if (repeat) total() else cost(),
+                )
                 // A Once run that answers "not met" still completed its job.
                 ExecutionResult.Success(met ?: verdict)
             }
@@ -354,7 +389,7 @@ internal class AgentScript(
      * heal's, unless that Check just missed) or none (a learned run's); a Once run needs a Check or a Readout.
      */
     private suspend fun writeCache(provider: ComponentProvider, key: String, run: Outcome.Finished, repeat: Boolean, cached: Check?, log: (String) -> Unit) {
-        val check = if (run.goalMet) cached else run.check
+        val check = if (run.goalMet && !run.changed) cached else run.check
         val skipped =
             when {
                 !run.verified -> "the Check or Readouts failed validation"
@@ -373,7 +408,8 @@ internal class AgentScript(
         scrubber: Scrubber,
         step: Confirmation,
     ): Boolean {
-        notify(config, provider, scrubber.forLog("${step.question}\nConfirmation needed: answer in the window that opened. The task waits until you answer."))
+        val action = "Confirmation needed: answer in the window that opened. The task waits until you answer."
+        notify(config, provider, ResultMessage(Kind.Confirmation, scrubber.forLog(step.question), action, url = pageLink(step.url, scrubber)))
         fun esc(s: String) = escapeHtml(scrubber.forLog(s))
         val does = step.text?.let { "It will send: “${esc(it.trim())}”" } ?: "It will press “${esc(step.label)}”."
         val why = step.reason?.let(::esc) ?: "The agent gave no reason. It flagged this step because the button says “${esc(step.label)}”."
@@ -398,26 +434,36 @@ internal class AgentScript(
     }
 
     /**
-     * A result notification: the headline (also the final status line), an optional action line, details (success
-     * only), then the cost line. Raw causes (HTTP bodies, exception text) go to the log, not here.
+     * A result notification: the headline (also the final status line unless [status] is false), an optional action
+     * line, summary, Readouts and notes (success only), then the cost line, with the run's page link. Raw causes (HTTP
+     * bodies, exception text) go to the log, not here.
      */
     private inner class Report(val config: AgentConfiguration, val provider: ComponentProvider, val statusUpdate: suspend (String) -> Unit) {
-        suspend fun notify(headline: String, action: String? = null, details: List<String> = emptyList(), cost: String) {
-            statusUpdate(headline)
-            notify(config, provider, (listOfNotNull(headline, action) + details + cost).joinToString("\n"))
+        var url: String? = null
+
+        suspend fun notify(
+            kind: Kind,
+            headline: String,
+            action: String? = null,
+            summary: String? = null,
+            readouts: List<Pair<String, String>> = emptyList(),
+            notes: List<String> = emptyList(),
+            cost: String? = null,
+            status: Boolean = true,
+        ) {
+            if (status) statusUpdate(headline)
+            notify(config, provider, ResultMessage(kind, headline, action, summary, readouts, notes, cost, url))
         }
 
         suspend fun error(headline: String, action: String? = null, cost: String): ExecutionResult {
-            notify(headline, action, cost = cost)
+            notify(Kind.Failed, headline, action, cost = cost)
             return ExecutionResult.Error(headline)
         }
     }
 
-    private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, body: String) {
+    private suspend fun notify(config: AgentConfiguration, provider: ComponentProvider, message: ResultMessage) {
         val goal = runCatching { config.goal() }.getOrDefault("") // unset on the host: see validate
-        val title = "AI agent: " + if (goal.length > 60) goal.take(60) + "…" else goal
-        // Plain Telegram text (no parse mode): Cereal's default Markdown drops a message with an unpaired `_` or `*`, e.g. in a URL.
-        provider.notification().sendNotification(Notification(title, body, telegramMessage = TelegramMessage(text = body)))
+        provider.notification().sendNotification(message.notification(goal))
     }
 
     // Every error at once, in the words shown at Save. ponytail: upgrade to a host onStart message if Cereal ships one (Ask 8).
@@ -511,6 +557,9 @@ private fun escapeHtml(s: String) =
 internal fun stepCount(steps: Int) = if (steps == 1) "1 step" else "$steps steps"
 
 private const val COST_ZERO = "Cost: \$0"
+
+/** One side of a change's `old → new`: at most 100 characters. */
+private fun cut(s: String) = if (s.length > 100) s.take(99) + "…" else s
 
 /** A cost amount: `$0.21`, `$0`, `unknown (no price for x)` or `$0.12 + unknown`. */
 private fun spent(amount: Double, unpriced: Set<String?>) =

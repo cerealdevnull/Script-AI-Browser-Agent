@@ -4,8 +4,12 @@ import dev.kdriver.cdp.domain.Accessibility
 import dev.kdriver.cdp.domain.accessibility
 import dev.kdriver.cdp.domain.browser
 import dev.kdriver.cdp.domain.dom
+import dev.kdriver.cdp.domain.Page
+import dev.kdriver.cdp.domain.Runtime
 import dev.kdriver.cdp.domain.input
+import dev.kdriver.cdp.domain.page
 import dev.kdriver.cdp.domain.runtime
+import dev.kdriver.cdp.domain.target
 import dev.kdriver.core.browser.createBrowser
 import dev.kdriver.core.dom.DefaultElement
 import dev.kdriver.core.tab.ReadyState
@@ -24,17 +28,31 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.TimeUnit
 import dev.kdriver.core.browser.Browser as KBrowser
 
-/** The user's Chrome, headed, on a persistent profile; one tab. Element refs come from the latest [snapshot]. */
+/**
+ * The user's Chrome, headed, on a persistent profile. It acts in the current tab: the original one, or a tab an action
+ * of the agent opened ([follow]). Element refs come from the latest [snapshot].
+ */
 class Browser private constructor(private val browser: KBrowser, private val pageLoadTimeoutMs: Long) {
-    private val tab: Tab get() = browser.mainTab ?: error("Chrome has no open tab")
+    private val original: Tab? = browser.mainTab
+    private var current: Tab? = null // null: the original tab
+    private val tab: Tab get() = current ?: original ?: browser.mainTab ?: error("Chrome has no open tab")
+    private val followed = mutableSetOf<String>() // target ids of tabs the agent switched to
+    private var known = emptySet<String>() // target ids open at the previous follow
     private var refs: Map<Int, Int> = emptyMap() // ref -> backendDOMNodeId
     private var names: Map<Int, String> = emptyMap() // ref -> role "name"
     private var textRefs: Map<String, Int> = emptyMap() // "tN" -> backendDOMNodeId
+    private var frameOf: Map<Int, Frame> = emptyMap() // backendDOMNodeId -> its frame, for nodes inside a frame
+    private var scrub: (String) -> String = { it } // the latest snapshot's, so a re-resolved name matches [names]
+
+    /** Where the browser's own log lines go (cookie banners it rejected). */
+    var log: (String) -> Unit = {}
 
     /** Bumped by each [snapshot] whose `[n]` refs point at other nodes than before: older `[n]` refs are stale. */
     var refsVersion = 0
@@ -87,9 +105,67 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         settle()
     }
 
+    /** Back in history; on a followed tab with no history, closes it (the next [follow] returns to its opener). */
     suspend fun goBack() {
+        if (tab.targetId in followed && (tab.rawEvaluate("history.length") as? JsonPrimitive)?.contentOrNull == "1") {
+            browser.connection!!.target.closeTarget(tab.targetId!!)
+            return
+        }
         tab.back()
         settle()
+    }
+
+    /**
+     * Before a snapshot: when the current tab closed, moves to its opener (else the original tab); then switches to
+     * the newest tab the current tab opened since the previous call, and waits for it to load. [switch] false only
+     * takes note of new tabs (ones the start page opened by itself, not an action of the agent). Returns what changed,
+     * for the model and the log.
+     */
+    suspend fun follow(switch: Boolean = true): String? {
+        val pages = pages()
+        val open = pages.map { it.targetId }.toSet()
+        var note: String? = null
+        if (tab.targetId !in open) {
+            val opener = tab.openerId
+            browser.updateTargets()
+            current = browser.tabs.firstOrNull { it.targetId == opener && opener in open && it.targetId != original?.targetId }
+            invalidateRefs()
+            note = "That tab closed; back on ${url()}"
+        }
+        val fresh = pages.filter { it.targetId !in known && it.openerId == tab.targetId }.map { it.targetId }
+        known = open
+        if (switch && fresh.isNotEmpty()) {
+            browser.updateTargets()
+            browser.tabs.lastOrNull { it.targetId in fresh }?.let {
+                current = it
+                followed += it.targetId!!
+                invalidateRefs()
+                injectConsent(it) // its banner gets rejected too; settle() waits for that
+                settle()
+                note = "Now in a new tab: ${url()}"
+            }
+        }
+        return note
+    }
+
+    /** True when the current tab closed since the last [follow] (an action can't run there). */
+    suspend fun tabClosed(): Boolean = pages().none { it.targetId == tab.targetId }
+
+    private suspend fun pages() = browser.connection!!.target.getTargets().targetInfos.filter { it.type == "page" }
+
+    /** At the start of a goal run: closes every tab the agent followed and makes the original tab current again. */
+    suspend fun reset() {
+        val open = pages().map { it.targetId }.toSet()
+        followed.filter { it in open }.forEach { browser.connection!!.target.closeTarget(it) }
+        followed.clear()
+        if (current != null) invalidateRefs()
+        current = null
+    }
+
+    private fun invalidateRefs() {
+        refs = emptyMap()
+        names = emptyMap()
+        textRefs = emptyMap()
     }
 
     suspend fun wait(seconds: Int) {
@@ -147,20 +223,49 @@ class Browser private constructor(private val browser: KBrowser, private val pag
      */
     suspend fun snapshot(scrub: (String) -> String = { it }): String {
         val nodes = tab.accessibility.getFullAXTree().nodes
-        val byId = nodes.associateBy { it.nodeId }
         val newRefs = mutableMapOf<Int, Int>()
         val newNames = mutableMapOf<Int, String>()
         val newTextRefs = mutableMapOf<String, Int>()
+        val byId = nodes.associateBy { it.nodeId }
+        val root = nodes.firstOrNull { it.parentId == null }
+        val popups = openPopups(nodes, byId, root?.nodeId)
+        val printed = mutableSetOf<String>()
+        val newFrameOf = mutableMapOf<Int, Frame>()
         val out = StringBuilder()
+        var inPopups = true
+        this.scrub = scrub
+        val pageSite = hostOf(url())?.let(::registrableDomain)
+        var frames: List<Frame>? = null
 
-        fun walk(id: String, depth: Int, parentName: String) {
+        /** The frame behind an `Iframe` node and its tree when it is on the page's site; else appends its label and returns null. */
+        suspend fun iframe(backendId: Int): Pair<Frame, List<Accessibility.AXNode>>? {
+            val all = frames ?: frames().also { frames = it }
+            val child = all.firstOrNull { it.id == tab.dom.describeNode(backendNodeId = backendId).node.frameId }
+            val site = child?.url?.let(::hostOf)
+            // about:blank and about:srcdoc frames have no host: they inherit the page's origin.
+            val sameSite = child?.url?.startsWith("about:") == true || (site != null && registrableDomain(site) == pageSite)
+            val tree =
+                if (child == null || !sameSite) null
+                else runCatching { tab.accessibility.getFullAXTree(frameId = child.id).nodes }.getOrNull()
+            if (child == null || tree == null) {
+                out.append(" (cross-origin: ${site ?: "?"}, not visible)")
+                return null
+            }
+            return child to tree
+        }
+
+        suspend fun walk(byId: Map<String, Accessibility.AXNode>, id: String, depth: Int, parentName: String, frame: Frame?) {
+            // Popup bookkeeping covers the page's own tree only: node ids inside a frame are a separate id space.
+            if (frame == null && (id in printed || (id in popups && !inPopups))) return
             val node = byId[id] ?: return
+            if (frame == null) printed += id
             val role = node.role.text()
-            val name = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
+            val name = name(node)
             var childDepth = depth
             if (!node.ignored && role !in SKIP && !(role == "StaticText" && (name.isEmpty() || name == parentName))) {
                 out.append("  ".repeat(depth))
                 val backendId = node.backendDOMNodeId
+                if (backendId != null && frame != null) newFrameOf[backendId] = frame
                 if (role in INTERACTIVE && backendId != null) {
                     val ref = newRefs.size + 1
                     newRefs[ref] = backendId
@@ -179,18 +284,58 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                     val flag = p.name.name.lowercase()
                     if (flag in FLAGS && p.value.text() == "true") out.append(' ').append(flag)
                 }
+                if (role == "Iframe" && backendId != null) {
+                    // A frame on the page's own site, one level deep, is shown inline; any other one is a placeholder.
+                    val content = if (frame == null) iframe(backendId) else null.also { out.append(" (nested, not visible)") }
+                    out.append('\n')
+                    content?.let { (child, tree) ->
+                        tree.firstOrNull { it.parentId == null }?.let { walk(tree.associateBy { it.nodeId }, it.nodeId, depth + 1, "", child) }
+                    }
+                    return
+                }
                 out.append('\n')
                 childDepth = depth + 1
             }
-            node.childIds?.forEach { walk(it, childDepth, name.ifEmpty { parentName }) }
+            node.childIds?.forEach { walk(byId, it, childDepth, name.ifEmpty { parentName }, frame) }
         }
-        nodes.firstOrNull { it.parentId == null }?.let { walk(it.nodeId, 0, "") }
+        popups.forEach { walk(byId, it, 0, "", null) }
+        val popupText = out.toString()
+        out.clear()
+        inPopups = false
+        root?.let { walk(byId, it.nodeId, 0, "", null) }
         if (newRefs != refs) refsVersion++
         if (newTextRefs != textRefs) textRefsVersion++
         refs = newRefs
         names = newNames
         textRefs = newTextRefs
-        return if (out.length > MAX_CHARS) out.substring(0, MAX_CHARS) + "\n…(truncated)" else out.toString()
+        frameOf = newFrameOf
+        val page = out.cut(MAX_CHARS)
+        return if (popupText.isEmpty()) page else "— open popup —\n${popupText.cut(MAX_POPUP_CHARS).trimEnd()}\n— page —\n$page"
+    }
+
+    /**
+     * The open popups, in DOM order: the `controls` targets of every `expanded` node plus every dialog. Printed first,
+     * so a dropdown a site renders at the end of a long page is never cut off.
+     */
+    private fun openPopups(nodes: List<Accessibility.AXNode>, byId: Map<String, Accessibility.AXNode>, root: String?): List<String> {
+        val byBackend = nodes.filter { !it.ignored && it.backendDOMNodeId != null }.associateBy { it.backendDOMNodeId }
+        val ids = mutableSetOf<String>()
+        nodes.filter { !it.ignored }.forEach { node ->
+            if (node.role.text() in DIALOGS) ids += node.nodeId
+            val props = node.properties.orEmpty()
+            if (props.any { it.name.name.lowercase() == "expanded" && it.value.text() == "true" }) {
+                props.filter { it.name.name.lowercase() == "controls" }.flatMap { it.value.relatedNodes.orEmpty() }
+                    .mapNotNullTo(ids) { byBackend[it.backendDOMNodeId]?.nodeId }
+            }
+        }
+        if (ids.isEmpty() || root == null) return emptyList()
+        val order = mutableListOf<String>()
+        fun visit(id: String) {
+            if (id in ids) order += id
+            byId[id]?.childIds?.forEach(::visit)
+        }
+        visit(root)
+        return order
     }
 
     /**
@@ -205,23 +350,76 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         val objectId = tab.dom.resolveNode(backendNodeId = backendId).`object`.objectId
         val result = tab.runtime.callFunctionOn(FINGERPRINT_JS, objectId = objectId, returnByValue = true)
         result.exceptionDetails?.let { error("fingerprint failed: ${it.text}") }
-        return Fingerprint((result.result.value as JsonPrimitive).content)
+        return Fingerprint(withFrame((result.result.value as JsonPrimitive).content, backendId))
+    }
+
+    /** [json] plus `frame: {pattern, index}` when [backendId] is inside a frame; absent means the top document. */
+    private fun withFrame(json: String, backendId: Int): String {
+        val frame = frameOf[backendId] ?: return json
+        val loc = JsonObject(mapOf("pattern" to JsonPrimitive(frame.pattern), "index" to JsonPrimitive(frame.index)))
+        return JsonObject(Json.parseToJsonElement(json).jsonObject + ("frame" to loc)).toString()
+    }
+
+    /** The frame a fingerprint's `frame` names, or null when the page has no such frame (a miss). */
+    private suspend fun frameFor(loc: JsonObject): Frame? {
+        val pattern = loc.getValue("pattern").jsonPrimitive.content
+        val index = loc.getValue("index").jsonPrimitive.int
+        return frames().firstOrNull { it.pattern == pattern && it.index == index }
+    }
+
+    /** Evaluates [expression] in the top document, or in an isolated world of the frame [loc] names (not via `contentDocument`); null when that frame is missing. */
+    // ponytail: a new isolated world per call; cache one per frame id if replay ever gets slow.
+    private suspend fun evaluateIn(loc: JsonObject?, expression: String, byValue: Boolean): Runtime.RemoteObject? {
+        val contextId = loc?.let { tab.page.createIsolatedWorld(frameId = (frameFor(it) ?: return null).id, worldName = "aiagent").executionContextId }
+        val result = tab.runtime.evaluate(expression, contextId = contextId, returnByValue = byValue)
+        result.exceptionDetails?.let { error("evaluation failed: ${it.exception?.description ?: it.text}") }
+        return result.result
+    }
+
+    /** The top-level frames (children of the top document) in document order, numbered per URL pattern. */
+    private suspend fun frames(): List<Frame> {
+        val urls = mutableMapOf<String, String>()
+        fun collect(tree: Page.FrameTree) {
+            urls[tree.frame.id] = tree.frame.url
+            tree.childFrames?.forEach(::collect)
+        }
+        collect(tab.page.getFrameTree().frameTree)
+        val pageUrl = url()
+        val root = tab.dom.getDocument(depth = 0).root.nodeId
+        val seen = mutableMapOf<String, Int>()
+        return tab.dom.querySelectorAll(root, "iframe, frame").nodeIds.mapNotNull { nodeId ->
+            val node = tab.dom.describeNode(nodeId = nodeId).node
+            val id = node.frameId ?: return@mapNotNull null
+            // An out-of-process frame may be missing from this tab's frame tree; its src still names its host.
+            val src = node.attributes.orEmpty().chunked(2).firstOrNull { it[0] == "src" }?.getOrNull(1)
+            val url = urls[id] ?: src?.let { runCatching { java.net.URI(pageUrl).resolve(it).toString() }.getOrNull() }.orEmpty()
+            val pattern = urlPattern(url)
+            Frame(id, url, pattern, seen.merge(pattern, 1, Int::plus)!! - 1)
+        }
     }
 
     /** The whitespace-collapsed text of every node [fingerprint] matches on the live page: unique when size is 1. */
-    suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).map { it.text }
+    suspend fun resolve(fingerprint: Fingerprint): List<String> = matches(fingerprint).orEmpty().map { it.text }
 
-    /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled. */
-    suspend fun matches(fingerprint: Fingerprint): List<Match> =
-        (tab.rawEvaluate("($RESOLVE_JS)(${fingerprint.json})") as JsonArray).map {
+    /** Every node [fingerprint] matches on the live page, with its text and whether it is enabled; null when its frame is missing (a miss). */
+    suspend fun matches(fingerprint: Fingerprint): List<Match>? {
+        val frame = Json.parseToJsonElement(fingerprint.json).jsonObject["frame"]?.jsonObject
+        val found = evaluateIn(frame, "($RESOLVE_JS)(${fingerprint.json})", byValue = true)?.value as? JsonArray ?: return null
+        return found.map {
             Match(it.jsonObject.getValue("text").jsonPrimitive.content, it.jsonObject.getValue("enabled").jsonPrimitive.boolean)
         }
+    }
 
     /** Where an action's target is, for replay: its `role "name"` plus an xpath fallback (opaque JSON for [refFor]). */
     suspend fun stepTarget(ref: Int): String {
-        val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
-        val xpath = (tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true).result.value as JsonPrimitive).content
-        return JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString()
+        val xpath =
+            reresolving(ref) {
+                val objectId = tab.dom.resolveNode(backendNodeId = backendId(ref)).`object`.objectId
+                val result = tab.runtime.callFunctionOn(XPATH_JS, objectId = objectId, returnByValue = true)
+                result.exceptionDetails?.let { error(it.exception?.description ?: it.text) }
+                (result.result.value as JsonPrimitive).content
+            }
+        return withFrame(JsonObject(mapOf("name" to JsonPrimitive(describe(ref)), "xpath" to JsonPrimitive(xpath))).toString(), backendId(ref))
     }
 
     /**
@@ -231,12 +429,15 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     suspend fun refFor(target: String): Int? {
         val json = Json.parseToJsonElement(target).jsonObject
         val name = json.getValue("name").jsonPrimitive.content
-        val byName = names.filterValues { it == name }.keys
+        val loc = json["frame"]?.jsonObject
+        val frameId = loc?.let { (frameFor(it) ?: return null).id }
+        // Only refs in the step's own frame (none: the top document) count.
+        val byName = names.filter { (ref, n) -> n == name && frameOf[refs.getValue(ref)]?.id == frameId }.keys
         if (byName.size > 1) return null
         byName.singleOrNull()?.let { return it }
         val xpath = JsonPrimitive(json.getValue("xpath").jsonPrimitive.content)
-        val node = tab.runtime.evaluate("document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue")
-        val objectId = node.result.objectId ?: return null
+        val node = evaluateIn(loc, "document.evaluate($xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue", byValue = false)
+        val objectId = node?.objectId ?: return null
         val backendId = tab.dom.describeNode(objectId = objectId).node.backendNodeId
         val ref = refs.entries.firstOrNull { it.value == backendId }?.key ?: return null
         // Renamed is fine; another kind of element (a search box where the email field was) is a miss.
@@ -265,20 +466,59 @@ class Browser private constructor(private val browser: KBrowser, private val pag
 
     private fun backendId(ref: Int) = refs[ref] ?: throw IllegalArgumentException("unknown ref $ref; use a ref from the latest snapshot")
 
-    private suspend fun element(ref: Int): DefaultElement {
-        val backendId = backendId(ref)
-        tab.dom.scrollIntoViewIfNeeded(backendNodeId = backendId)
-        return DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
-    }
+    private suspend fun element(ref: Int): DefaultElement =
+        reresolving(ref) {
+            val backendId = backendId(ref)
+            tab.dom.scrollIntoViewIfNeeded(backendNodeId = backendId)
+            DefaultElement(tab, tab.dom.describeNode(backendNodeId = backendId).node)
+        }
+
+    /**
+     * Runs [block] (which must not send input to the page); when [ref]'s node was re-rendered ("Node is detached"),
+     * points [ref] at the one live element with the same `role "name"` and runs it once more. No unique match: the
+     * error stands (never a guess). Other refs keep their nodes, so [refsVersion] stays.
+     */
+    private suspend fun <T> reresolving(ref: Int, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val name = names[ref]
+            // ponytail: only top-document refs are re-resolved; a re-rendered node inside a frame stays a stale-ref error.
+            if (name == null || DETACHED !in e.message.orEmpty() || refs[ref] in frameOf) throw e
+            val live =
+                tab.accessibility.getFullAXTree().nodes.filter {
+                    !it.ignored && it.backendDOMNodeId != null && it.role.text() in INTERACTIVE && "${it.role.text()} \"${name(it)}\"" == name
+                }
+            refs = refs + (ref to (live.singleOrNull()?.backendDOMNodeId ?: throw e))
+            block()
+        }
+
+    private fun name(node: Accessibility.AXNode) = scrub(node.name.text()).replace(WHITESPACE, " ").take(160)
 
     private suspend fun settle() = loading {}
 
-    /** Runs [action] and waits for the page to load: [PageLoadException] on a timeout or a Chrome network error page. */
+    /**
+     * Runs [action] and waits for the page to load: [PageLoadException] on a timeout or a Chrome network error page.
+     * A tab that closed meanwhile (a popup closing itself) has nothing to load: the next [follow] moves off it.
+     */
     private suspend fun loading(action: suspend () -> Unit) {
+        try {
+            loadingIn(action)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!tabClosed()) throw e
+        }
+    }
+
+    private suspend fun loadingIn(action: suspend () -> Unit) {
         withTimeoutOrNull(pageLoadTimeoutMs) {
             action()
             delay(300)
             tab.waitForReadyState(ReadyState.COMPLETE, pageLoadTimeoutMs)
+            consentSettled()
         } ?: url().let { throw PageLoadException("$it did not finish loading within ${pageLoadTimeoutMs / 1000} s", "timed out", it) }
         delay(300)
         if (url().startsWith("chrome-error:")) {
@@ -288,8 +528,24 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         }
     }
 
+    /** Waits while autoconsent is rejecting a banner (capped at 3 s from when this wait starts) and logs each rejection. */
+    private suspend fun consentSettled() {
+        val deadline = System.nanoTime() + 3_000_000_000
+        while (true) {
+            val state = tab.rawEvaluate(CONSENT_STATE_JS) as? JsonObject ?: return
+            state.getValue("rejected").jsonArray.forEach { log("Rejected cookies (${it.jsonPrimitive.content.lowercase()})") }
+            if (!state.getValue("busy").jsonPrimitive.boolean || System.nanoTime() >= deadline) return
+            delay(100)
+        }
+    }
+
     companion object {
         private const val MAX_CHARS = 14_000
+        private const val MAX_POPUP_CHARS = 6_000
+        private val DIALOGS = setOf("dialog", "alertdialog")
+
+        private fun CharSequence.cut(max: Int) = if (length > max) substring(0, max) + "\n…(truncated)" else toString()
+        private const val DETACHED = "Node is detached"
         private val TEXT_INPUT_TYPES = setOf("", "text", "email", "password", "search", "tel", "url")
         private val WHITESPACE = Regex("\\s+")
         private val SENSITIVE = Regex("password|passwd|e-?mail|cc-|card|cvc|cvv|iban")
@@ -323,6 +579,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
         """
 
         private const val XPATH_JS = """function() {
+            if (!this.isConnected) throw new Error('$DETACHED from document');
             $JS_HELPERS
             return xpath(this);
         }"""
@@ -401,6 +658,29 @@ class Browser private constructor(private val browser: KBrowser, private val pag
             return found.map(e => ({text: text(e), enabled: !e.matches(':disabled') && e.getAttribute('aria-disabled') !== 'true'}));
         }"""
 
+        // Never waits for nothingDetected: a page without a banner costs no wait. autoconsent leaves cmpDetected in
+        // place when the banner never shows (a choice saved earlier), so that state counts only while it still looks (~5 s).
+        private const val CONSENT_STATE_JS = """(() => {
+            const c = window.__cerealConsent;
+            if (!c) return {busy: false, rejected: []};
+            const rejected = c.results.splice(0).filter(r => r.result).map(r => r.cmp);
+            const busy = ['openPopupDetected', 'runningOptOut'].includes(c.state) || (c.state === 'cmpDetected' && Date.now() - c.since < 6000);
+            return {busy, rejected};
+        })()"""
+
+        /** Our glue with the rules inlined, then the vendored autoconsent bundle (both unmodified, see autoconsent/VERSION). */
+        private val CONSENT_JS by lazy {
+            fun resource(name: String) = Browser::class.java.getResource(name)!!.readText()
+            resource("/consent-glue.js").replace("__RULES__", resource("/autoconsent/compact-rules.json")) + "\n" +
+                resource("/autoconsent/autoconsent.playwright.js")
+        }
+
+        /** Cookie banners get rejected on every new document of [tab] (its frames too) and once on the loaded one. */
+        private suspend fun injectConsent(tab: Tab) {
+            tab.page.enable() // without it Chrome doesn't run the script on new documents
+            tab.page.addScriptToEvaluateOnNewDocument(CONSENT_JS, runImmediately = true)
+        }
+
         private fun Accessibility.AXValue?.text() = (this?.value as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
 
         /** Starts Chrome on [profileDir], first killing a Chrome left over on it (a crashed run would block the profile). */
@@ -417,7 +697,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
                     browserConnectionMaxTries = 90
                 },
                 pageLoadTimeoutMs,
-            )
+            ).also { injectConsent(it.tab) }
         }
 
         private fun killLeftover(profileDir: java.nio.file.Path) {
@@ -440,6 +720,9 @@ class FormInfo(val inForm: Boolean, val clickSubmits: Boolean, val submitName: S
 /** A page didn't load: a timeout or a network error. Transient: a later attempt may work. */
 /** [message] for the model and the log; [reason] the short cause for the user; [url] the page, unless it's Chrome's error page. */
 class PageLoadException(message: String, val reason: String, val url: String? = null) : Exception(message)
+
+/** An iframe of the top document: [pattern] is [urlPattern] of its [url], [index] its position among those with that pattern. */
+private class Frame(val id: String, val url: String, val pattern: String, val index: Int)
 
 /** A node a [Fingerprint] matched on the live page. */
 class Match(val text: String, val enabled: Boolean)

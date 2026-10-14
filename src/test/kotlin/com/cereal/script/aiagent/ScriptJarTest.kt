@@ -104,6 +104,18 @@ class ScriptJarTest {
         }
     }
 
+    @Test
+    fun `the jar carries the vendored autoconsent files unmodified, as VERSION records them`() {
+        ZipFile(jar).use { zip ->
+            val version = zip.getInputStream(zip.getEntry("autoconsent/VERSION")).reader().readText()
+            for (name in listOf("autoconsent.playwright.js", "compact-rules.json")) {
+                val bytes = zip.getInputStream(zip.getEntry("autoconsent/$name") ?: error("no $name in the jar")).readBytes()
+                val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                assertTrue("$sha  $name" in version, "$name has sha256 $sha, VERSION says:\n$version")
+            }
+        }
+    }
+
     /** Clicks the product link, then finishes "not met" with a Check on the stock text. */
     private class FakeChatCompletions : Dispatcher() {
         override fun dispatch(request: RecordedRequest): MockResponse {

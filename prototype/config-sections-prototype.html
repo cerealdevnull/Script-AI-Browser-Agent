@@ -1,0 +1,188 @@
+<!doctype html>
+<!-- PROTOTYPE, throwaway. Question: how should sections and an advanced group look in the client form, and how does a script declare them?
+     Three variants of the AI Browser Agent form, switchable via ?variant=A|B|C (or ← →). Mocks the desktop client's form; nothing persists. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config sections prototype</title>
+<style>
+  :root { --bg:#16171b; --panel:#1f2026; --field:#2a2c34; --line:#363945; --text:#e7e8ee; --dim:#9a9db0; --accent:#7aa2ff; --err:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  .wrap { display:flex; gap:24px; padding:24px; padding-bottom:90px; align-items:flex-start; }
+  .form { flex:0 0 560px; background:var(--panel); border-radius:12px; padding:20px; }
+  .form h1 { font-size:18px; margin:0 0 4px; } .form .sub { color:var(--dim); margin-bottom:16px; }
+  .sdk { flex:1; min-width:320px; background:#0f1014; border:1px solid var(--line); border-radius:12px; padding:16px; position:sticky; top:24px; }
+  .sdk h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 8px; }
+  .sdk pre { margin:0; white-space:pre-wrap; font:12.5px/1.5 ui-monospace, monospace; color:#cfd3e6; }
+  .sdk .notes { margin-top:12px; color:var(--dim); font-size:13px; } .sdk .notes li { margin-bottom:4px; }
+  .field { margin-bottom:14px; } .field label { display:block; font-weight:600; margin-bottom:4px; }
+  .field .req { color:var(--accent); }
+  .field input, .field select { width:100%; background:var(--field); border:1px solid var(--line); color:var(--text); border-radius:6px; padding:8px 10px; font:inherit; }
+  .field .desc { color:var(--dim); font-size:12.5px; margin-top:3px; }
+  .field .error { color:var(--err); font-size:12.5px; margin-top:3px; }
+  .field.bad input { border-color:var(--err); }
+  .row { display:flex; gap:8px; margin-bottom:6px; } .row input { flex:1; }
+  .btn { background:none; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; font:inherit; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#0b1020; font-weight:600; }
+  .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; border-top:1px solid var(--line); padding-top:14px; }
+  .errcount { color:var(--err); margin-right:auto; align-self:center; }
+  /* A: headers */
+  .hdr { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); border-bottom:1px solid var(--line); padding-bottom:4px; margin:22px 0 12px; }
+  .hdr:first-of-type { margin-top:4px; }
+  .disclose { display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--accent); margin:22px 0 12px; user-select:none; }
+  /* B: cards */
+  .card { border:1px solid var(--line); border-radius:10px; margin-bottom:12px; }
+  .card > .head { display:flex; align-items:center; gap:8px; padding:12px 14px; cursor:pointer; user-select:none; }
+  .card > .head .t { font-weight:600; } .card > .head .s { color:var(--dim); font-size:12.5px; margin-left:auto; text-align:right; }
+  .card > .body { padding:4px 14px 2px; border-top:1px solid var(--line); }
+  .badge { background:var(--err); color:#fff; border-radius:9px; font-size:11px; padding:1px 7px; }
+  /* C: tabs */
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:16px; flex-wrap:wrap; }
+  .tab { padding:8px 12px; cursor:pointer; color:var(--dim); border-bottom:2px solid transparent; display:flex; gap:6px; align-items:center; }
+  .tab.on { color:var(--text); border-color:var(--accent); }
+  .chev { display:inline-block; width:1em; transition:transform .15s; } .open > .head .chev, .chev.open { transform:rotate(90deg); }
+  .switcher { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:#fff; color:#111; border-radius:999px; padding:6px 8px; display:flex; gap:10px; align-items:center; box-shadow:0 6px 24px rgba(0,0,0,.5); font-weight:600; }
+  .switcher button { border:0; background:#eee; border-radius:999px; width:30px; height:30px; cursor:pointer; font-size:16px; }
+  .state { margin-top:12px; font:12px ui-monospace, monospace; color:var(--dim); }
+</style>
+</head>
+<body>
+<div class="wrap"><div class="form" id="form"></div><div class="sdk" id="sdk"></div></div>
+<div class="switcher"><button id="prev">←</button><span id="label"></span><button id="next">→</button></div>
+<script>
+// Form state: in memory only. Max $ per run starts at 0 so Save shows an error inside the collapsed group.
+const S = { goal:'Tell me whether Long Nose Pliers is in stock', startUrl:'example.com', runMode:'Once', repeatInterval:'300',
+  provider:'Anthropic', apiKey:'', model:'', baseUrl:'', secrets:[{name:'email', value:'••••••'}],
+  allowedDomains:'', maxSteps:'40', maxRunCost:'0', maxTaskCost:'5', onNextStart:'Keep what was learned and sign-ins' };
+let saved = false; const open = {}; let tab = 'task';
+
+const SECTIONS = [
+  { key:'task', name:'Task', fields:['goal','startUrl','runMode','repeatInterval'] },
+  { key:'ai', name:'AI provider', fields:['provider','apiKey','model','baseUrl'] },
+  { key:'signin', name:'Sign-in secrets', fields:['secrets'] },
+  { key:'advanced', name:'Advanced', collapsed:true, fields:['allowedDomains','maxSteps','maxRunCost','maxTaskCost','onNextStart'] },
+];
+const F = {
+  goal:{ name:'Goal', req:true, desc:'What the agent should do, in plain language.' },
+  startUrl:{ name:'Start URL', req:true, desc:'The page the agent starts on.' },
+  runMode:{ name:'Run mode', opts:['Once','Repeat'], desc:'Once: reach the goal. Repeat: a monitor.' },
+  repeatInterval:{ name:'Check every (seconds)', req:true, show:()=>S.runMode==='Repeat' },
+  provider:{ name:'Provider', opts:['Anthropic','Gemini','OpenAI','OpenRouter','Custom'] },
+  apiKey:{ name:'API key', secret:true, req:()=>S.provider!=='Custom', desc:'Your key from the provider above.' },
+  model:{ name:'Model', req:()=>S.provider==='Custom', desc:'Leave empty for the recommended model.' },
+  baseUrl:{ name:'Server URL', req:true, show:()=>S.provider==='Custom' },
+  secrets:{ name:'Secrets', list:true, desc:'Name a secret and use the name in your goal. The AI never sees the value.' },
+  allowedDomains:{ name:'Allowed domains', desc:'Extra domains besides the start URL’s own.' },
+  maxSteps:{ name:'Max steps per run' }, maxRunCost:{ name:'Max $ per run' }, maxTaskCost:{ name:'Max $ per task' },
+  onNextStart:{ name:'On next start', opts:['Keep what was learned and sign-ins','Forget learned steps','Forget learned steps and sign out'] },
+};
+const isReq = k => typeof F[k].req === 'function' ? F[k].req() : !!F[k].req;
+const shown = k => !F[k].show || F[k].show();
+function err(k) {
+  if (!saved || !shown(k)) return null;
+  if (k==='apiKey' && isReq(k) && !S.apiKey) return `API key is required for ${S.provider}`;
+  if (['maxSteps','maxRunCost','maxTaskCost','repeatInterval'].includes(k) && S[k]!=='' && +S[k] <= 0) return `${F[k].name} must be > 0`;
+  if (k==='goal' && !S.goal) return 'Goal is required';
+  return null;
+}
+const sectionErrors = s => s.fields.filter(err).length;
+const esc = v => String(v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function field(k) {
+  if (!shown(k)) return '';
+  const f = F[k], e = err(k);
+  let input;
+  if (f.list) input = S.secrets.map((r,i)=>`<div class="row"><input data-list="${i}" data-col="name" value="${esc(r.name)}" placeholder="Name"><input type="password" data-list="${i}" data-col="value" value="${esc(r.value)}" placeholder="Value"></div>`).join('') +
+    `<button class="btn" data-add>+ Add</button> <button class="btn">Import CSV</button>`;
+  else if (f.opts) input = `<select data-k="${k}">${f.opts.map(o=>`<option ${o===S[k]?'selected':''}>${o}</option>`).join('')}</select>`;
+  else input = `<input data-k="${k}" type="${f.secret?'password':'text'}" value="${esc(S[k])}">`;
+  return `<div class="field ${e?'bad':''}"><label>${f.name}${isReq(k)?' <span class="req">*</span>':''}</label>${input}${f.desc?`<div class="desc">${f.desc}</div>`:''}${e?`<div class="error">${e}</div>`:''}</div>`;
+}
+// One-line summary of a collapsed section, from its current values (what B shows on the header).
+const summary = s => s.key==='advanced' ? `${S.maxSteps} steps · $${S.maxRunCost}/run · $${S.maxTaskCost}/task${S.allowedDomains?' · +domains':''}` :
+  s.key==='signin' ? `${S.secrets.length} secret${S.secrets.length===1?'':'s'}` : s.key==='ai' ? `${S.provider}${S.model?' · '+S.model:''}` : S.goal.slice(0,40);
+
+const VARIANTS = {
+  A: { name:'Headers + Advanced disclosure', render() {
+    return SECTIONS.map(s => s.collapsed
+      ? `<div class="disclose" data-toggle="${s.key}"><span class="chev ${open[s.key]?'open':''}">▸</span>${open[s.key]?'Hide':'Show'} ${s.name.toLowerCase()} settings ${sectionErrors(s)?`<span class="badge">${sectionErrors(s)}</span>`:''}</div>${open[s.key]?s.fields.map(field).join(''):''}`
+      : `<div class="hdr">${s.name}</div>${s.fields.map(field).join('')}`).join('');
+  }, sdk:
+`// Sections declared once, in order, on the configuration.
+// Items name their section; position orders within it.
+@ScriptConfigurationSections(
+  Section(key = "task", name = "Task"),
+  Section(key = "ai", name = "AI provider"),
+  Section(key = "signin", name = "Sign-in secrets"),
+  Section(key = "advanced", name = "Advanced", collapsed = true),
+)
+interface AgentConfiguration : ScriptConfiguration {
+  @ScriptConfigurationItem(section = "advanced", position = 1,
+    keyName = "maxSteps", name = "Max steps per run", ...)
+  fun maxSteps(): Int = 40
+}`, notes:['Lightest: a plain header per section; only <b>collapsed = true</b> changes behaviour.','Items with no section render first, unheaded (old scripts look unchanged).','The collapsed group sits last; a Save error inside it shows a badge and should auto-open it.'] },
+
+  B: { name:'Collapsible cards with summaries', render() {
+    return SECTIONS.map(s => { const o = open[s.key] ?? !s.collapsed, n = sectionErrors(s);
+      return `<div class="card ${o?'open':''}"><div class="head" data-toggle="${s.key}" data-def="${!s.collapsed}"><span class="chev">▸</span><span class="t">${s.name}</span>${n?`<span class="badge">${n}</span>`:''}<span class="s">${o?'':esc(summary(s))}</span></div>${o?`<div class="body">${s.fields.map(field).join('')}</div>`:''}</div>`; }).join('');
+  }, sdk:
+`@ScriptConfigurationSections(
+  Section(key = "task", name = "Task"),
+  Section(key = "ai", name = "AI provider"),
+  Section(key = "signin", name = "Sign-in secrets"),
+  Section(key = "advanced", name = "Advanced", collapsed = true),
+)
+// Summary line: the client builds it from the section's
+// values (no script code), e.g. "40 steps · $2/run · $5/task".
+// A script-supplied summary would be one more modifier hook:
+//   interface SectionSummary { fun summary(config: ScriptConfig): String? }`, notes:['Every section can fold; only Advanced starts folded.','A folded card shows its values in one line, so the user sees the caps without opening.','Open question: client-built summary vs a script hook (runs on the UI thread, like getVisibility).'] },
+
+  C: { name:'Tabs', render() {
+    return `<div class="tabs">${SECTIONS.map(s=>`<div class="tab ${tab===s.key?'on':''}" data-tab="${s.key}">${s.name}${sectionErrors(s)?` <span class="badge">${sectionErrors(s)}</span>`:''}</div>`).join('')}</div>` +
+      SECTIONS.find(s=>s.key===tab).fields.map(field).join('');
+  }, sdk:
+`@ScriptConfigurationSections(
+  Section(key = "task", name = "Task"),
+  Section(key = "ai", name = "AI provider"),
+  Section(key = "signin", name = "Sign-in secrets"),
+  Section(key = "advanced", name = "Advanced"),
+)
+// No collapsed flag: a tab is hidden until clicked anyway.`, notes:['One section at a time; Advanced is just the last tab.','Errors on another tab only show as a tab badge: the user must go find them.','Hides required fields (API key) behind a click on a first run.'] },
+};
+
+const keys = Object.keys(VARIANTS);
+let v = new URLSearchParams(location.search).get('variant'); if (!keys.includes(v)) v = 'A';
+function setVariant(nv) { v = nv; const u = new URL(location); u.searchParams.set('variant', v); history.replaceState(null,'',u); render(); }
+
+function render() {
+  const V = VARIANTS[v], total = SECTIONS.reduce((a,s)=>a+sectionErrors(s),0);
+  document.getElementById('form').innerHTML = `<h1>AI Browser Agent</h1><div class="sub">New task configuration</div>${V.render()}
+    <div class="actions">${total?`<span class="errcount">${total} error${total>1?'s':''}</span>`:''}<button class="btn" data-reset>Reset</button><button class="btn primary" data-save>Save</button></div>
+    <div class="state">state: ${esc(JSON.stringify({variant:v, open, tab, saved, errors:total}))}</div>`;
+  document.getElementById('sdk').innerHTML = `<h2>SDK declaration · ${v}</h2><pre>${esc(V.sdk)}</pre><ul class="notes">${V.notes.map(n=>`<li>${n}</li>`).join('')}</ul>`;
+  document.getElementById('label').textContent = `${v} (${V.name})`;
+}
+document.addEventListener('input', e => { const t = e.target;
+  if (t.dataset.k) { S[t.dataset.k] = t.value; if (t.tagName === 'SELECT') render(); }
+  if (t.dataset.list) S.secrets[+t.dataset.list][t.dataset.col] = t.value; });
+document.addEventListener('focusout', e => { if (e.target.dataset.k && saved) render(); });
+document.addEventListener('click', e => { const t = e.target.closest('[data-toggle],[data-tab],[data-save],[data-reset],[data-add]'); if (!t) return;
+  if (t.dataset.toggle) { const k = t.dataset.toggle, s = SECTIONS.find(x=>x.key===k); open[k] = !(open[k] ?? (v==='B' && !s.collapsed)); }
+  if (t.dataset.tab) tab = t.dataset.tab;
+  if (t.hasAttribute('data-add')) S.secrets.push({name:'', value:''});
+  if (t.hasAttribute('data-reset')) { saved = false; for (const k in open) delete open[k]; }
+  if (t.hasAttribute('data-save')) { saved = true;
+    // Save opens any folded section holding an error (A and B); C jumps to the first tab with one.
+    SECTIONS.forEach(s => { if (sectionErrors(s)) open[s.key] = true; });
+    const first = SECTIONS.find(sectionErrors); if (first) tab = first.key; }
+  render(); });
+document.getElementById('prev').onclick = () => setVariant(keys[(keys.indexOf(v)+keys.length-1)%keys.length]);
+document.getElementById('next').onclick = () => setVariant(keys[(keys.indexOf(v)+1)%keys.length]);
+document.addEventListener('keydown', e => { if (e.target.closest('input,select,textarea,[contenteditable]')) return;
+  if (e.key==='ArrowLeft') document.getElementById('prev').click(); if (e.key==='ArrowRight') document.getElementById('next').click(); });
+render();
+</script>
+</body>
+</html>

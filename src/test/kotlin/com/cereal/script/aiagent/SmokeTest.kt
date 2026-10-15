@@ -40,7 +40,7 @@ class SmokeTest {
                 val config =
                     TestConfig(
                         goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
-                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, onNextStart = OnNextStart.ForgetSteps,
+                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode,
                     )
                 val script = AgentScript(profilesDir = tempProfiles())
                 val provider = host.create()

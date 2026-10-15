@@ -190,17 +190,7 @@ interface AgentConfiguration : ScriptConfiguration {
     )
     fun allowedDomains(): List<AllowedDomain>?
 
-    // Replaces the Re-learn switch (keyName "reLearn", now unused).
-    @ScriptConfigurationItem(
-        position = 40,
-        keyName = "onNextStart",
-        name = "On next start",
-        description =
-            "A task's settings can't be changed after it's created, so this has no effect yet. " +
-                "If the site changed or the agent keeps doing the wrong thing, duplicate the task and start the copy: " +
-                "it starts without learned steps and signs you out of the site.",
-    )
-    fun onNextStart(): OnNextStart = OnNextStart.Keep
+    // Retired keyNames, never reuse: "reLearn", "onNextStart" (resets are task actions now).
 
     // Nested so the shrunk jar's metadata restore (AgentConfiguration*.class) covers it: the host reflects on it.
     interface AllowedDomain : ScriptConfigurationListItem {
@@ -299,16 +289,6 @@ fun secretSlotErrors(slots: List<Pair<String?, Secret?>>, i: Int): Pair<String?,
 }
 
 enum class RunMode { Once, Repeat }
-
-/** What a task start resets, once: only when the choice changed since the last start. */
-enum class OnNextStart(private val label: String, val status: String?) {
-    Keep("Keep what was learned and sign-ins", null),
-    ForgetSteps("Forget learned steps", "Forgot learned steps"),
-    ForgetStepsAndSignOut("Forget learned steps and sign out", "Forgot learned steps and sign-ins"),
-    ;
-
-    override fun toString() = label
-}
 
 /** A preset fixes the server and recommends a model; Custom takes both from the form. */
 enum class Provider(val baseUrl: String?, val recommendedModel: String?, val keyUrl: String?) {

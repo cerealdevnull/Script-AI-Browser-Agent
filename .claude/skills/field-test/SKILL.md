@@ -32,7 +32,7 @@ SMOKE_URL='<start url>' SMOKE_GOAL='<goal>' SMOKE_MODE=Once SMOKE_RUNS=1 SMOKE_I
 ```
 
 - `Repeat` uses `SMOKE_RUNS=3`: one learn run and two replays.
-- It runs on `gemini-3.5-flash-lite` (a few cents) and needs `GEMINI_API_KEY` in the environment. When the test
+- It runs on `gemini-3.8-flash` (cents per run) and needs `GEMINI_API_KEY` in the environment. When the test
   reports *skipped*, the key is missing from this session's shell, which loads the user's shell profile. Ask the
   user to add the export to that profile and restart the session, or to run the command in their own terminal and
   tell you when it's done. The key stays out of chat, files and your commands.

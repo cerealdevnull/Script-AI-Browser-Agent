@@ -81,7 +81,7 @@ the defaults in `AgentConfiguration.kt` and update spec #69.
 ## Smoke check on real sites (not pass/fail)
 
 `SmokeTest` runs the real script on five real sites, to find what breaks outside Toolshop. It uses
-`gemini-3.5-flash-lite` through the OpenAI-compatible provider (a few cents in total) and skips itself without
+`gemini-3.8-flash` (the Gemini preset's recommended model) through the OpenAI-compatible provider (cents per site) and skips itself without
 `GEMINI_API_KEY`. The goals are read-only and every confirmation is declined. For each site it writes the log,
 the notifications and every model request and response to `build/smoke/<id>/`, to be judged afterwards.
 

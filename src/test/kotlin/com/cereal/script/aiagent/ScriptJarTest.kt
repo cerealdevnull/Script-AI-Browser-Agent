@@ -48,10 +48,13 @@ class ScriptJarTest {
         val functions = configClass.kotlin.memberFunctions.associateBy { it.name }
         assertTrue(functions.getValue("baseUrl").returnType.isMarkedNullable)
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
-        assertTrue(functions.getValue("secret3Value").returnType.isMarkedNullable)
+        assertTrue(functions.getValue("secrets").returnType.isMarkedNullable)
         assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
         val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
         assertFalse(row.returnType.isMarkedNullable)
+        val secretRow = loader.loadClass("${configClass.name}\$NamedSecret").kotlin.memberFunctions.associateBy { it.name }
+        assertEquals(Secret::class, secretRow.getValue("value").returnType.classifier)
+        assertFalse(secretRow.getValue("label").returnType.isMarkedNullable)
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->

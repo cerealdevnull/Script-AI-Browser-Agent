@@ -286,6 +286,13 @@ class Agent(
                         throw e
                     } catch (e: DeclinedException) {
                         return Outcome.Declined(e.step, steps)
+                    } catch (e: UnknownSecretException) {
+                        // The model only knows the listed names, so the goal asks for one the user hasn't entered.
+                        return Outcome.Failed(
+                            "The goal needs a secret '${e.name}', but Sign-in secrets has no row with that label.",
+                            steps,
+                            "Duplicate the task, add a '${e.name}' row under Sign-in secrets, and start the copy.",
+                        )
                     } catch (e: PageLoadException) {
                         val key = call.name + call.args
                         if (key == loadFailure) return loadFailed(e, (call.args["url"] as? JsonPrimitive)?.contentOrNull, steps)
@@ -633,7 +640,7 @@ class Agent(
                 "type_secret" -> {
                     val ref = args.int("ref")
                     val name = args.str("field")
-                    val secret = secrets[name] ?: throw IllegalArgumentException("unknown secret '$name'; available: ${secrets.keys.joinToString()}")
+                    val secret = secrets[name] ?: throw UnknownSecretException(name)
                     refusingAccountSettings(ref)
                     require(browser.isTextInput(ref)) { "[$ref] is not an editable text input" }
                     require(isAllowedHost(hostOf(browser.url()), allowedDomains)) { "never allowed: typing a secret on a page that is not on an allowed domain" }
@@ -695,6 +702,8 @@ class Agent(
     }
 
     private class DeclinedException(val step: Confirmation) : Exception("declined by user")
+
+    private class UnknownSecretException(val name: String) : Exception("unknown secret '$name'")
 
     /**
      * Never-do: no typing into password, email or card fields on an account-settings page. A form submitted by e.g.

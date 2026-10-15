@@ -20,8 +20,14 @@ import kotlin.test.Test
 class SmokeTest {
     private class Site(val id: String, val url: String, val goal: String, val mode: RunMode, val runs: Int = 1)
 
+    // One ad-hoc site from the environment (the field-test skill) replaces the fixed list.
+    private val adHoc =
+        env("SMOKE_URL")?.let { url ->
+            Site(env("SMOKE_ID", "adhoc")!!, url, env("SMOKE_GOAL")!!, RunMode.valueOf(env("SMOKE_MODE", "Once")!!), env("SMOKE_RUNS", "1")!!.toInt())
+        }
+
     private val sites =
-        listOf(
+        adHoc?.let(::listOf) ?: listOf(
             Site("nike", "https://www.nike.com/nl/w?q=air%20force%201", "Notify me when the men's Nike Air Force 1 '07 costs less than €50", RunMode.Repeat, 3),
             Site("zalando", "https://www.zalando.nl/catalogus/?q=nike+air+force+1", "Notify me when the Nike Sportswear Air Force 1 '07 sneaker is in stock in size 48.5", RunMode.Repeat, 3),
             Site("ticketmaster", "https://www.ticketmaster.nl/", "Notify me when Ticketmaster lists any Taylor Swift event in the Netherlands", RunMode.Repeat, 2),

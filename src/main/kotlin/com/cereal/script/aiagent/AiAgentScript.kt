@@ -165,7 +165,7 @@ internal class AgentScript(
                 caps,
                 { log.info(scrubber.forLog(it)) },
                 { log.warn(scrubber.forLog(it)) },
-                configuration.secrets(),
+                configuration.secretsByName(),
                 scrubber,
                 configuration.allowedDomainSet(),
                 {
@@ -468,7 +468,6 @@ internal class AgentScript(
 
     // Every error at once, in the words shown at Save. ponytail: upgrade to a host onStart message if Cereal ships one (Ask 8).
     private fun validate(config: AgentConfiguration): String? {
-        val slots = config.secretSlots()
         val errors =
             listOfNotNull(
                 // The host throws for a required item with no value, and a throw from onStart reaches the user without its message.
@@ -481,9 +480,7 @@ internal class AgentScript(
                 positiveError("Max \$ per run", config.maxRunCost()),
                 positiveError("Max \$ per task", config.maxTaskCost()),
                 positiveError("Check every", config.repeatInterval()).takeIf { config.runMode() == RunMode.Repeat },
-            ) +
-                // Only the slots the form shows (as SecretState): slot 1, or slot N once slot N-1 has a label.
-                slots.indices.filter { i -> i == 0 || slots[i - 1].first != null }.flatMap { i -> secretSlotErrors(slots, i).toList().filterNotNull() }
+            ) + secretRowErrors(config.secretRows())
         if (errors.isEmpty()) return null
         return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
@@ -507,7 +504,7 @@ internal class AgentScript(
         return choice.status
     }
 
-    private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
+    private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secretsByName().keys)
 
     // Keyed by a task id the script stores in the task's own preferences (new task, new id: a deleted task's profile is
     // never reused) plus a hash of the secrets (another account gets its own cookies). Rewording the goal keeps sign-ins.
@@ -515,7 +512,7 @@ internal class AgentScript(
     private suspend fun profileName(config: AgentConfiguration, provider: ComponentProvider): String {
         val prefs = provider.preference()
         val taskId = prefs.getString(TASK_ID_KEY) ?: UUID.randomUUID().toString().also { prefs.setString(TASK_ID_KEY, it) }
-        val secrets = config.secrets().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }.toString()
+        val secrets = config.secretsByName().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }.toString()
         val hash = MessageDigest.getInstance("SHA-256").digest(secrets.toByteArray()).joinToString("") { "%02x".format(it) }
         return "$taskId-${hash.take(16)}"
     }

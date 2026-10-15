@@ -68,6 +68,16 @@
     *;
 }
 
+# The host reads options = ModelOptions::class through objectInstance, like the state modifiers.
+-keep class * implements com.cereal.sdk.FieldOptions {
+    <init>(...);
+    *;
+}
+# The restored ModelOptions.class (build.gradle.kts) calls this by its original name.
+-keep class com.cereal.script.aiagent.ModelOptionsKt {
+    *** loadModelOptions(...);
+}
+
 # Keep the enum class so that annotations are preserved.
 -keep enum * {}
 

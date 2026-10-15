@@ -153,7 +153,7 @@ internal class AgentScript(
                         } catch (e: ModelException) {
                             if (e.status != 401 && e.status != 403) throw e
                             log.error(scrubber.forLog(e.message.orEmpty()))
-                            throw ModelException(keyRejected(configuration), status = e.status)
+                            throw ModelException(keyRejected(configuration.provider()), status = e.status)
                         }
                 },
                 configuration.goal(),
@@ -363,7 +363,7 @@ internal class AgentScript(
         val problem =
             try {
                 when (model.check()) {
-                    Preflight.BadKey -> keyRejected(config)
+                    Preflight.BadKey -> keyRejected(config.provider())
                     Preflight.UnknownModel -> "${who.replaceFirstChar(Char::uppercase)} has no model called `$id`. $clear, or check the spelling."
                     Preflight.NoTools -> "`$id` can't control the browser here. $clear."
                     null -> null.also { checked = true }
@@ -532,11 +532,14 @@ internal fun modelClient(config: AgentConfiguration): ModelClient {
 
 private fun AgentConfiguration.modelId() = model()?.trim()?.ifEmpty { null } ?: provider().recommendedModel!!
 
-private fun who(config: AgentConfiguration) = if (config.provider() == Provider.Custom) "your server" else config.provider().name
+private fun who(config: AgentConfiguration) = who(config.provider())
 
-private fun keyRejected(config: AgentConfiguration): String {
-    val from = config.provider().keyUrl?.let { "from $it " }.orEmpty()
-    return "${who(config).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
+internal fun who(provider: Provider) = if (provider == Provider.Custom) "your server" else provider.name
+
+/** The run's and the Model dropdown's message for a 401/403. */
+internal fun keyRejected(provider: Provider): String {
+    val from = provider.keyUrl?.let { "from $it " }.orEmpty()
+    return "${who(provider).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
 }
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."

@@ -666,7 +666,8 @@ class Agent(
                     require(scheme == "http" || scheme == "https") { "never allowed: only http(s) URLs can be opened" }
                     require(scrubber.forModel(url) == url) { "never allowed: a secret in a URL" }
                     require(isAllowedHost(hostOf(url), allowedDomains)) {
-                        "never allowed: ${hostOf(url)} is not an allowed domain (allowed: ${allowedDomains.joinToString()})"
+                        "never allowed: ${hostOf(url)} is not an allowed domain (allowed: ${allowedDomains.joinToString()}); " +
+                            "the user can add it under Allowed domains"
                     }
                     browser.navigate(url)
                     pageResult("ok")

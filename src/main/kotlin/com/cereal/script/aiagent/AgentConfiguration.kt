@@ -3,17 +3,26 @@ package com.cereal.script.aiagent
 import com.cereal.sdk.ScriptConfiguration
 import com.cereal.sdk.ScriptConfigurationItem
 import com.cereal.sdk.ScriptConfigurationListItem
+import com.cereal.sdk.ScriptConfigurationSections
+import com.cereal.sdk.Section
 import com.cereal.sdk.models.Secret
 import com.cereal.sdk.statemodifier.ScriptConfig
 import com.cereal.sdk.statemodifier.ScriptConfigValue
 import com.cereal.sdk.statemodifier.StateModifier
 import com.cereal.sdk.statemodifier.Visibility
 
-// keyNames are persisted by the host: never change them.
+// keyNames are persisted by the host: never change them. Sections are layout only.
+@ScriptConfigurationSections(
+    Section("task", "Task"),
+    Section("provider", "AI provider"),
+    Section("secrets", "Sign-in secrets"),
+    Section("advanced", "Advanced", collapsed = true),
+)
 interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 0,
         keyName = "goal",
+        section = "task",
         name = "Goal",
         description =
             "What the agent should do, in plain language. Once: tell me whether Long Nose Pliers is in stock. " +
@@ -25,8 +34,9 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 1,
         keyName = "startUrl",
+        section = "task",
         name = "Start URL",
-        description = "The page the agent starts on, e.g. https://example.com.",
+        description = "The page the agent starts on.",
         stateModifier = StartUrlState::class,
     )
     fun startUrl(): String
@@ -34,6 +44,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 2,
         keyName = "runMode",
+        section = "task",
         name = "Run mode",
         description =
             "Once: reach the goal and notify the result. Repeat: a monitor. The first run learns with the model; later checks replay " +
@@ -44,6 +55,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 3,
         keyName = "repeatInterval",
+        section = "task",
         name = "Check every (seconds)",
         description = "How long to wait between checks.",
         stateModifier = CheckEveryState::class,
@@ -53,6 +65,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 4,
         keyName = "provider",
+        section = "provider",
         name = "Provider",
         description =
             "The company that runs the AI. You pay them directly with your own API key. Anthropic is recommended. " +
@@ -64,11 +77,11 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 5,
         keyName = "apiKey",
+        section = "provider",
         name = "API key",
         description =
-            "Your key from the provider above, sent only to them. Get one at: Anthropic https://console.anthropic.com/settings/keys · " +
-                "Gemini https://aistudio.google.com/apikey · OpenAI https://platform.openai.com/api-keys · " +
-                "OpenRouter https://openrouter.ai/settings/keys. Optional for Custom.",
+            "Get a key: [Anthropic](https://console.anthropic.com/settings/keys) · [Gemini](https://aistudio.google.com/apikey) · " +
+                "[OpenAI](https://platform.openai.com/api-keys) · [OpenRouter](https://openrouter.ai/settings/keys). Optional for Custom.",
         stateModifier = ApiKeyState::class,
     )
     fun apiKey(): Secret?
@@ -76,6 +89,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 6,
         keyName = "model",
+        section = "provider",
         name = "Model",
         description =
             "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna, " +
@@ -89,8 +103,9 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 7,
         keyName = "baseUrl",
+        section = "provider",
         name = "Server URL",
-        description = "Your server's OpenAI-compatible address, e.g. http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio).",
+        description = "Your server's OpenAI-compatible address. The hint is Ollama's; LM Studio's is http://localhost:1234/v1.",
         stateModifier = ServerUrlState::class,
     )
     fun baseUrl(): String?
@@ -98,6 +113,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 31,
         keyName = "maxSteps",
+        section = "advanced",
         name = "Max steps per run",
         description = "Each model call is one step. A run that reaches this many steps stops.",
         stateModifier = MaxStepsState::class,
@@ -107,6 +123,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 32,
         keyName = "maxRunCost",
+        section = "advanced",
         name = "Max $ per run",
         description =
             "A run stops once its model calls have cost this many dollars. " +
@@ -118,6 +135,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 33,
         keyName = "maxTaskCost",
+        section = "advanced",
         name = "Max $ per task",
         description = "The task stops once all its runs together have cost this many dollars. Resets when the task restarts.",
         stateModifier = MaxTaskCostState::class,
@@ -183,6 +201,7 @@ interface AgentConfiguration : ScriptConfiguration {
     @ScriptConfigurationItem(
         position = 30,
         keyName = "allowedDomains",
+        section = "advanced",
         name = "Allowed domains",
         description =
             "Extra domains the agent may open, besides the start URL's own (e.g. a login or payment provider). " +
@@ -342,7 +361,9 @@ abstract class ErrorOnlyState(private val error: (ScriptConfig) -> String?) : St
 
 object GoalState : ErrorOnlyState({ goalError(it.string("goal")) })
 
-object StartUrlState : ErrorOnlyState({ startUrlError(it.string("startUrl")) })
+object StartUrlState : ErrorOnlyState({ startUrlError(it.string("startUrl")) }) {
+    override fun getPlaceholder(config: ScriptConfig) = "https://example.com"
+}
 
 object MaxStepsState : ErrorOnlyState({ positiveError("Max steps per run", it.number("maxSteps")) })
 
@@ -367,6 +388,8 @@ object ServerUrlState : StateModifier {
     override fun getVisibility(config: ScriptConfig) = if (config.provider() == Provider.Custom) Visibility.VisibleRequired else Visibility.Hidden
 
     override fun getError(config: ScriptConfig) = serverUrlError(config.provider(), config.string("baseUrl"))
+
+    override fun getPlaceholder(config: ScriptConfig) = "http://localhost:11434/v1"
 }
 
 object CheckEveryState : StateModifier {

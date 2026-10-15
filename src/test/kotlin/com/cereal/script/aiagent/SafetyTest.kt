@@ -43,6 +43,7 @@ class SafetyTest {
                     val result = it.lastResults.single()
                     assertTrue(result.isError, result.text)
                     assertTrue("not an allowed domain" in result.text, result.text)
+                    assertTrue("Allowed domains" in result.text, "names the field: ${result.text}")
                     assertTrue(it.lastText.contains("127.0.0.1"), "still on the start page")
                     listOf(call("fail", """{"reason": "x"}"""))
                 },

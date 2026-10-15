@@ -49,19 +49,54 @@ class FormLayoutTest {
     }
 
     @Test
-    fun `fields follow the S6 order`() {
-        val order =
+    fun `fields are grouped into Task, AI provider, Sign-in secrets and a collapsed Advanced section`() {
+        val sections =
+            AgentConfiguration::class.java.getAnnotation(com.cereal.sdk.ScriptConfigurationSections::class.java)!!.value
+                .map { Triple(it.key, it.name, it.collapsed) }
+        assertEquals(
+            listOf(
+                Triple("task", "Task", false),
+                Triple("provider", "AI provider", false),
+                Triple("secrets", "Sign-in secrets", false),
+                Triple("advanced", "Advanced", true),
+            ),
+            sections,
+        )
+        val bySection =
             AgentConfiguration::class.java.methods
                 .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
                 .sortedBy { it.position }
-                .map { it.keyName }
+                .groupBy({ it.section }, { it.keyName })
+        assertEquals(listOf("goal", "startUrl", "runMode", "repeatInterval"), bySection["task"])
+        assertEquals(listOf("provider", "apiKey", "model", "baseUrl"), bySection["provider"])
+        assertEquals(listOf("allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost"), bySection["advanced"])
+        // Unsectioned fields render first, so only the ones on their way out (secret slots, On next start) may stay there.
+        assertTrue(bySection[""].orEmpty().all { it.startsWith("secret") || it == "onNextStart" }, bySection[""].toString())
+    }
+
+    @Test
+    fun `Start URL and Server URL show their examples as placeholders, not in the description`() {
+        assertEquals("https://example.com", StartUrlState.getPlaceholder(form()))
+        assertEquals("http://localhost:11434/v1", ServerUrlState.getPlaceholder(form("provider" to ScriptConfigValue.EnumScriptConfigValue(Provider.Custom))))
+        val items =
+            AgentConfiguration::class.java.methods
+                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
+                .associateBy { it.keyName }
+        assertEquals("The page the agent starts on.", items.getValue("startUrl").description)
+        val server = items.getValue("baseUrl").description
+        assertTrue("e.g." !in server && "11434" !in server && "LM Studio's is http://localhost:1234/v1" in server, server)
+    }
+
+    @Test
+    fun `the API key description is one line of provider links`() {
+        val items =
+            AgentConfiguration::class.java.methods
+                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
+                .associateBy { it.keyName }
         assertEquals(
-            listOf(
-                "goal", "startUrl", "runMode", "repeatInterval", "provider", "apiKey", "model", "baseUrl",
-                "secret1Name", "secret1Value", "secret2Name", "secret2Value", "secret3Name", "secret3Value",
-                "allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost", "onNextStart",
-            ),
-            order,
+            "Get a key: [Anthropic](https://console.anthropic.com/settings/keys) · [Gemini](https://aistudio.google.com/apikey) · " +
+                "[OpenAI](https://platform.openai.com/api-keys) · [OpenRouter](https://openrouter.ai/settings/keys). Optional for Custom.",
+            items.getValue("apiKey").description,
         )
     }
 

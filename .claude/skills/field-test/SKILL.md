@@ -1,48 +1,48 @@
 ---
 name: field-test
-description: Field-test the script on a real site with a goal and start URL, judge the result against what the user expects, and rank what to improve.
+description: Field-test the script with a field-test JSON file (goal, start URL, expected result), judge the run against it, and rank what to improve.
 disable-model-invocation: true
 ---
 
 # Field test
 
 A **field test** runs the real script (real Chrome, a real cheap model) on one goal and start URL, then judges what
-it did against the **oracle**: the result the user expects. The output is a ranked list of improvements to the
-script, each traced to code. Vocabulary (goal run, Check, replay cache, miss, heal…) is in `CONTEXT.md`.
+it did against the **oracle**: the result the user expects. The input is a **field-test file**,
+`field-tests/<id>.json`; the output is a ranked list of improvements to the script, each traced to code. Vocabulary
+(goal run, Check, replay cache, miss, heal…) is in `CONTEXT.md`.
 
-## 1. Pin the oracle
+## 1. Read the field-test file
 
-From the user's message, collect:
+The fields and their defaults are the `FieldTest` class in `src/test/kotlin/com/cereal/script/aiagent/SmokeTest.kt`;
+`field-tests/toolshop-invoice.json` is a complete example. When the user gives a goal and URL instead of a file,
+write the file for them and show it.
 
-- **goal** and **start URL**.
-- **run mode**: a question goal is `Once`; a condition goal is `Repeat`. Infer it; ask only when the goal reads both ways.
-- **oracle**: what a correct run produces, stated so a log can prove it right or wrong. For `Once`: what the
-  notification must say (the actual value, e.g. "the price is €89,99"). For `Repeat`: whether the condition holds
-  now (so run 1 should notify, or stay silent and return `Loop`), and that later runs replay with 0 model calls.
-- **secrets**, when the goal signs in: up to three labels (e.g. `email`, `password`), the config's secret slots.
-  Only the labels; the values reach the script through the environment (step 2).
+Hold each field to its job:
 
-Done when every oracle line is checkable against `notifications.txt` and `log.txt`. A fuzzy oracle ("it should
-work") gets one round of questions to the user; open the start URL in the browser pane to find the real value
-yourself when the user doesn't know it.
+- **mode**: a question goal is `Once`; a condition goal is `Repeat` (which defaults to 3 runs: one learn run and two
+  replays). A goal that reads both ways is a question for the user.
+- **expected** is the oracle: each line checkable against `notifications.txt` and `log.txt`. For `Once`, the actual
+  value the notification must say ("the price is €89,99"). For `Repeat`, whether the condition holds now (run 1
+  notifies, or stays silent and returns `Loop`) and that replays make 0 model calls. Rewrite a fuzzy line ("it should
+  work") with the user; open the start URL in the browser pane to find the real value when they don't know it.
+- **secrets** maps each secret slot label (`email`, `password`, at most three) to the environment variable that holds
+  its value. The file holds names only, so it can be committed.
+
+Done when the file passes `./gradlew test --tests '*FieldTestFileTest'` and every `expected` line is checkable.
 
 ## 2. Run the script
 
 ```bash
-SMOKE_URL='<start url>' SMOKE_GOAL='<goal>' SMOKE_MODE=Once SMOKE_RUNS=1 SMOKE_ID=<short-slug> \
-  ./gradlew acceptanceTest --tests '*SmokeTest'
+SMOKE_FILE=field-tests/<id>.json ./gradlew acceptanceTest --tests '*SmokeTest'
 ```
 
-- `Repeat` uses `SMOKE_RUNS=3`: one learn run and two replays.
-- It runs on `gemini-3.8-flash` (cents per run) and needs `GEMINI_API_KEY` in the environment. When the test
-  reports *skipped*, the key is missing from this session's shell, which loads the user's shell profile. Ask the
-  user to add the export to that profile and restart the session, or to run the command in their own terminal and
-  tell you when it's done. The key stays out of chat, files and your commands.
+- It runs on `gemini-3.8-flash` (cents per run) and needs `GEMINI_API_KEY` in the environment, plus every variable
+  the file's `secrets` names. This session's shell loads the user's shell profile. When the test reports *skipped*
+  (no key) or fails with `… is not set`, ask the user to add those exports to their profile and restart the session,
+  or to run the command in their own terminal and tell you when it's done. Values stay out of chat, files and your
+  commands; you work with variable names only.
 - Under Claude Code, Chrome runs headless. When the log or snapshot shows a bot wall, CAPTCHA or an empty page,
   rerun with `-Pheadless=false` before calling it a script problem.
-- Secrets: each slot is an environment variable `SMOKE_SECRET_<label>=<value>`, at most three. Tell the user the
-  exact variable names to set, the same way as the key; you never see, type or echo a value. A run with secrets
-  also passes the oracle line "no secret value reaches the model or the log" (step 3).
 - Every confirmation is declined, so a goal that buys, sends or deletes stops at its confirmation. That is correct
   behaviour; judge everything up to it.
 
@@ -61,8 +61,9 @@ Give each goal run a verdict: **met** or **missed**, per oracle line, with the e
 a log line, a snapshot excerpt). Also note costs the user would feel even on a met run: steps, dollars, a `Repeat`
 replay that called the model, a confirmation an unattended monitor would stall on.
 
-With secrets, check the leak line with a count, so the value stays off screen:
-`grep -cF -- "$SMOKE_SECRET_<label>" build/smoke/<id>/traffic.json build/smoke/<id>/log.txt`. Any count above 0 is a
+A file with secrets carries one more oracle line: no secret value reaches the model or the log. Check it with a count,
+so the value stays off screen, once per variable the file names:
+`grep -cF -- "$<VARIABLE>" build/smoke/<id>/traffic.json build/smoke/<id>/log.txt`. Any count above 0 is a
 **missed** line and ranks first in the report.
 
 Done when every oracle line of every goal run has a verdict with evidence.

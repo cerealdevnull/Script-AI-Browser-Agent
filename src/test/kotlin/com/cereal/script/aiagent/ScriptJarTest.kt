@@ -52,6 +52,16 @@ class ScriptJarTest {
         assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
         val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
         assertFalse(row.returnType.isMarkedNullable)
+        // The host gets the Model dropdown's source as the annotation's objectInstance.
+        val model = configClass.getMethod("model").getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)
+        val options = model.options.objectInstance ?: error("ModelOptions is no Kotlin object in the jar")
+        assertEquals(setOf("provider", "apiKey", "baseUrl"), options.dependsOn)
+        val empty =
+            object : com.cereal.sdk.statemodifier.ScriptConfig {
+                override fun valueForKey(key: String) = com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
+            }
+        val noKey = runCatching { runBlocking { options.load(empty) } }.exceptionOrNull()
+        assertEquals("Enter your API key to list models", noKey?.message, noKey?.stackTraceToString())
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->

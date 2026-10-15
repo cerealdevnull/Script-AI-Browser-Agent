@@ -77,11 +77,9 @@ interface AgentConfiguration : ScriptConfiguration {
         position = 6,
         keyName = "model",
         name = "Model",
-        description =
-            "Leave empty for the recommended model (Anthropic: Claude Sonnet 5.5, Gemini: Gemini 3.8 Flash, OpenAI: GPT-5.6 Luna, " +
-                "OpenRouter: Claude Sonnet 5.5). " +
-                "Required for Custom.",
+        description = "Leave empty for the recommended model. Required for Custom.",
         stateModifier = ModelState::class,
+        options = ModelOptions::class,
     )
     fun model(): String?
 
@@ -319,9 +317,9 @@ enum class Provider(val baseUrl: String?, val recommendedModel: String?, val key
     Custom(null, null, null),
 }
 
-private fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value as? Provider ?: Provider.Anthropic
+internal fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value as? Provider ?: Provider.Anthropic
 
-private fun ScriptConfig.string(key: String) = (valueForKey(key) as? ScriptConfigValue.StringScriptConfigValue)?.value
+internal fun ScriptConfig.string(key: String) = (valueForKey(key) as? ScriptConfigValue.StringScriptConfigValue)?.value
 
 private fun ScriptConfig.number(key: String): Number? =
     when (val v = valueForKey(key)) {
@@ -361,6 +359,8 @@ object ModelState : StateModifier {
     override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() == Provider.Custom)
 
     override fun getError(config: ScriptConfig) = modelError(config.provider(), config.string("model"))
+
+    override fun getPlaceholder(config: ScriptConfig) = config.provider().recommendedModel
 }
 
 object ServerUrlState : StateModifier {

@@ -64,12 +64,13 @@ val scriptJar =
 
         // The host reads the config form with kotlin-reflect (nullability, defaults), which needs the Kotlin metadata
         // that ProGuard strips (its -keepkotlinmetadata fails with the stdlib as a library jar). The config classes are
-        // kept unrenamed and reference only kept names, so put the compiler's originals back.
+        // kept unrenamed and reference only kept names, so put the compiler's originals back. Likewise ModelOptions,
+        // which the host reads as the Model field's `options` objectInstance.
         val classes = sourceSets.main.get().output.classesDirs
         doLast {
             val jar = file("$cerealScriptFolder/release.jar").toPath()
             FileSystems.newFileSystem(URI.create("jar:${jar.toUri()}"), emptyMap<String, Any>()).use { zip ->
-                classes.asFileTree.matching { include("**/AgentConfiguration*.class") }.visit {
+                classes.asFileTree.matching { include("**/AgentConfiguration*.class", "**/ModelOptions.class") }.visit {
                     if (!isDirectory) {
                         val target = zip.getPath(relativePath.pathString)
                         target.parent?.let { Files.createDirectories(it) }

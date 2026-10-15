@@ -211,7 +211,7 @@ class HealTest {
         task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
         assertEquals(
-            "Couldn't find the pliers.\nPick “Forget learned steps” in On next start, then start the task again.\n" +
+            "Couldn't find the pliers.\nDuplicate the task and start the copy. The copy starts without learned steps and signs you out of the site.\n" +
                 "Cost: \$0.01 (the page changed, so it re-learned part of it)",
             host.notifications.last().message,
         )

@@ -19,6 +19,8 @@ From the user's message, collect:
 - **oracle**: what a correct run produces, stated so a log can prove it right or wrong. For `Once`: what the
   notification must say (the actual value, e.g. "the price is €89,99"). For `Repeat`: whether the condition holds
   now (so run 1 should notify, or stay silent and return `Loop`), and that later runs replay with 0 model calls.
+- **secrets**, when the goal signs in: up to three labels (e.g. `email`, `password`), the config's secret slots.
+  Only the labels; the values reach the script through the environment (step 2).
 
 Done when every oracle line is checkable against `notifications.txt` and `log.txt`. A fuzzy oracle ("it should
 work") gets one round of questions to the user; open the start URL in the browser pane to find the real value
@@ -38,6 +40,9 @@ SMOKE_URL='<start url>' SMOKE_GOAL='<goal>' SMOKE_MODE=Once SMOKE_RUNS=1 SMOKE_I
   tell you when it's done. The key stays out of chat, files and your commands.
 - Under Claude Code, Chrome runs headless. When the log or snapshot shows a bot wall, CAPTCHA or an empty page,
   rerun with `-Pheadless=false` before calling it a script problem.
+- Secrets: each slot is an environment variable `SMOKE_SECRET_<label>=<value>`, at most three. Tell the user the
+  exact variable names to set, the same way as the key; you never see, type or echo a value. A run with secrets
+  also passes the oracle line "no secret value reaches the model or the log" (step 3).
 - Every confirmation is declined, so a goal that buys, sends or deletes stops at its confirmation. That is correct
   behaviour; judge everything up to it.
 
@@ -55,6 +60,10 @@ Read the three files:
 Give each goal run a verdict: **met** or **missed**, per oracle line, with the evidence quoted (a notification line,
 a log line, a snapshot excerpt). Also note costs the user would feel even on a met run: steps, dollars, a `Repeat`
 replay that called the model, a confirmation an unattended monitor would stall on.
+
+With secrets, check the leak line with a count, so the value stays off screen:
+`grep -cF -- "$SMOKE_SECRET_<label>" build/smoke/<id>/traffic.json build/smoke/<id>/log.txt`. Any count above 0 is a
+**missed** line and ranks first in the report.
 
 Done when every oracle line of every goal run has a verdict with evidence.
 

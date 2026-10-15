@@ -92,7 +92,9 @@ SMOKE_ONLY=nike,ad ./gradlew acceptanceTest --tests '*SmokeTest'   # a subset
 SMOKE_URL=https://… SMOKE_GOAL='…' SMOKE_MODE=Repeat SMOKE_RUNS=3 SMOKE_ID=mine ./gradlew acceptanceTest --tests '*SmokeTest'   # one goal of your own
 ```
 
-The `/field-test` skill (`.claude/skills/field-test/`) runs that last form and judges the run against what you expect.
+A goal that signs in takes its secret slots as `SMOKE_SECRET_<label>=<value>` (at most three, e.g.
+`SMOKE_SECRET_email`, `SMOKE_SECRET_password`). The `/field-test` skill (`.claude/skills/field-test/`) runs that last
+form and judges the run against what you expect.
 
 Results on 2026-10-11 (`gemini-3.5-flash-lite`, script commit c69d50a). The Gemini free tier answered a few
 requests with 429. The script retried them, so they caused no failures.

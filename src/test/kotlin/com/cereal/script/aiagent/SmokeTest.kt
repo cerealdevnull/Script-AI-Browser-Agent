@@ -18,12 +18,15 @@ import kotlin.test.Test
  */
 @Tag("acceptance")
 class SmokeTest {
-    private class Site(val id: String, val url: String, val goal: String, val mode: RunMode, val runs: Int = 1)
+    private class Site(val id: String, val url: String, val goal: String, val mode: RunMode, val runs: Int = 1, val secrets: List<Pair<String?, Secret?>> = emptyList())
 
     // One ad-hoc site from the environment (the field-test skill) replaces the fixed list.
+    // Each SMOKE_SECRET_<label>=<value> fills one of the config's three secret slots, for goals that sign in.
     private val adHoc =
         env("SMOKE_URL")?.let { url ->
-            Site(env("SMOKE_ID", "adhoc")!!, url, env("SMOKE_GOAL")!!, RunMode.valueOf(env("SMOKE_MODE", "Once")!!), env("SMOKE_RUNS", "1")!!.toInt())
+            val secrets = System.getenv().filterKeys { it.startsWith(SECRET_PREFIX) }.toSortedMap().map { (k, v) -> k.removePrefix(SECRET_PREFIX) to Secret(v) }
+            check(secrets.size <= 3) { "at most 3 ${SECRET_PREFIX}* variables, the config has 3 secret slots" }
+            Site(env("SMOKE_ID", "adhoc")!!, url, env("SMOKE_GOAL")!!, RunMode.valueOf(env("SMOKE_MODE", "Once")!!), env("SMOKE_RUNS", "1")!!.toInt(), secrets)
         }
 
     private val sites =
@@ -47,6 +50,7 @@ class SmokeTest {
                     TestConfig(
                         goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
                         baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, onNextStart = OnNextStart.ForgetSteps,
+                        secrets = site.secrets,
                     )
                 val script = AgentScript(profilesDir = tempProfiles())
                 val provider = host.create()
@@ -73,6 +77,7 @@ class SmokeTest {
 
     private companion object {
         const val MODEL = "gemini-3.8-flash"
+        const val SECRET_PREFIX = "SMOKE_SECRET_"
         const val GEMINI = "https://generativelanguage.googleapis.com/v1beta/openai"
     }
 }

@@ -288,6 +288,7 @@ class Agent(
                         return Outcome.Declined(e.step, steps)
                     } catch (e: UnknownSecretException) {
                         // The model only knows the listed names, so the goal asks for one the user hasn't entered.
+                        // "Duplicate the task": secrets can't be edited on an existing task, only set on a new one.
                         return Outcome.Failed(
                             "The goal needs a secret '${e.name}', but Sign-in secrets has no row with that label.",
                             steps,
@@ -643,7 +644,10 @@ class Agent(
                     val secret = secrets[name] ?: throw UnknownSecretException(name)
                     refusingAccountSettings(ref)
                     require(browser.isTextInput(ref)) { "[$ref] is not an editable text input" }
-                    require(isAllowedHost(hostOf(browser.url()), allowedDomains)) { "never allowed: typing a secret on a page that is not on an allowed domain" }
+                    val host = hostOf(browser.url())
+                    require(isAllowedHost(host, allowedDomains)) {
+                        "never allowed: typing a secret on a page that is not on an allowed domain ($host); the user can add it under Allowed domains"
+                    }
                     browser.type(ref, scrubber.reveal(name, secret))
                     irreversible.secretTyped(ref)
                     pageResult("ok: typed secret '$name' into [$ref]")

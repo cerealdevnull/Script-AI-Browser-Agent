@@ -357,7 +357,7 @@ internal class AgentScript(
         warn: (String) -> Unit,
     ): ExecutionResult? {
         statusUpdate("Checking your API key and model")
-        val who = who(config)
+        val who = who(config.provider())
         val id = config.modelId()
         val clear = if (config.provider() == Provider.Custom) "Pick another Model" else "Clear Model to use the recommended one"
         val problem =
@@ -429,7 +429,7 @@ internal class AgentScript(
 
     /**
      * A result notification: the headline (also the final status line unless [status] is false), an optional action
-     * line, summary, Readouts and notes (success only), then the cost line, with the run's page link. Raw causes (HTTP
+     * line, summary and Readouts, then the cost line, with the run's page link. Raw causes (HTTP
      * bodies, exception text) go to the log, not here.
      */
     private inner class Report(val config: AgentConfiguration, val provider: ComponentProvider, val statusUpdate: suspend (String) -> Unit) {
@@ -441,12 +441,11 @@ internal class AgentScript(
             action: String? = null,
             summary: String? = null,
             readouts: List<Pair<String, String>> = emptyList(),
-            notes: List<String> = emptyList(),
             cost: String? = null,
             status: Boolean = true,
         ) {
             if (status) statusUpdate(headline)
-            notify(config, provider, ResultMessage(kind, headline, action, summary, readouts, notes, cost, url))
+            notify(config, provider, ResultMessage(kind, headline, action, summary, readouts, cost, url))
         }
 
         suspend fun error(headline: String, action: String? = null, cost: String): ExecutionResult {
@@ -531,8 +530,6 @@ internal fun modelClient(config: AgentConfiguration): ModelClient {
 }
 
 private fun AgentConfiguration.modelId() = model()?.trim()?.ifEmpty { null } ?: provider().recommendedModel!!
-
-private fun who(config: AgentConfiguration) = who(config.provider())
 
 internal fun who(provider: Provider) = if (provider == Provider.Custom) "your server" else provider.name
 

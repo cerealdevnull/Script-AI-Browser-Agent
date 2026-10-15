@@ -109,6 +109,7 @@ class SafetyTest {
                 {
                     val (secret, typed) = it.lastResults
                     assertTrue(secret.isError && "not on an allowed domain" in secret.text, secret.text)
+                    assertTrue("Allowed domains" in secret.text, "names the field: ${secret.text}")
                     assertFalse(typed.isError, typed.text)
                     listOf(call("fail", """{"reason": "x"}"""))
                 },

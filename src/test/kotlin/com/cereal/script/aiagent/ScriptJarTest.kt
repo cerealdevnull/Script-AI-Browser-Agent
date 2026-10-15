@@ -129,6 +129,40 @@ class ScriptJarTest {
     }
 
     @Test
+    fun `the host can instantiate every form field's state modifier and options from the shrunk jar`() {
+        val manifest = ZipFile(jar).use { zip -> zip.getInputStream(zip.getEntry("manifest.json")).reader().readText() }
+        val loader = HostLikeScriptClassLoader(jar.toURI().toURL(), javaClass.classLoader)
+        val scriptClass = loader.loadClass(Json.parseToJsonElement(manifest).jsonObject["script"]!!.jsonPrimitive.content)
+        val configClass = scriptClass.genericInterfaces.filterIsInstance<ParameterizedType>()
+            .first { it.rawType == Script::class.java }.actualTypeArguments.single() as Class<*>
+
+        // Like the host's ScriptConfigurationDefinitionBuilder: a null objectInstance fails the whole form.
+        val items =
+            (listOf(configClass) + configClass.declaredClasses).flatMap { it.methods.toList() }
+                .mapNotNull { m -> m.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)?.let { m.name to it } }
+        assertEquals(16, items.size, items.map { it.first }.toString())
+        val modifiers =
+            items.associate { (name, item) ->
+                assertNotNull(item.options.objectInstance, "$name: ${item.options} is no Kotlin object in the jar")
+                name to (item.stateModifier.objectInstance ?: error("$name: ${item.stateModifier} is no Kotlin object in the jar"))
+            }
+
+        val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" } as Enum<*>
+        fun config(vararg values: Pair<String, com.cereal.sdk.statemodifier.ScriptConfigValue>) =
+            object : com.cereal.sdk.statemodifier.ScriptConfig {
+                override fun valueForKey(key: String) =
+                    values.toMap()[key] ?: com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
+            }
+        val customProvider = "provider" to com.cereal.sdk.statemodifier.ScriptConfigValue.EnumScriptConfigValue(custom)
+        assertEquals("Model is required for Custom", modifiers.getValue("model").getError(config(customProvider)))
+        assertEquals("claude-sonnet-5-5", modifiers.getValue("model").getPlaceholder(config()))
+        assertEquals("http://localhost:11434/v1", modifiers.getValue("baseUrl").getPlaceholder(config(customProvider)))
+        val ftp = "startUrl" to com.cereal.sdk.statemodifier.ScriptConfigValue.StringScriptConfigValue("ftp://example.com")
+        assertEquals("Start URL must be an http(s) URL", modifiers.getValue("startUrl").getError(config(ftp)))
+        assertEquals("Goal is required", modifiers.getValue("goal").getError(config()))
+    }
+
+    @Test
     fun `the jar carries the vendored autoconsent files unmodified, as VERSION records them`() {
         ZipFile(jar).use { zip ->
             val version = zip.getInputStream(zip.getEntry("autoconsent/VERSION")).reader().readText()

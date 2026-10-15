@@ -81,6 +81,10 @@ class Host : ComponentProviderFactory {
         TestScriptRunner(recording).run(config, this)
         return recording.last
     }
+
+    /** Runs the task action named [name] from the task's menu, like the host does while the task is stopped. */
+    suspend fun act(script: Script<AgentConfiguration>, name: String, config: AgentConfiguration): String? =
+        script.taskActions().single { it.name == name }.run(config, provider)
 }
 
 /** One task's preferences. TestPreferenceComponent shares one static map across every instance, i.e. across tasks. */
@@ -129,11 +133,9 @@ class TestConfig(
     val allowedDomains: List<String> = emptyList(),
     val runMode: RunMode = RunMode.Once,
     val repeatInterval: Int = 300,
-    val onNextStart: OnNextStart = OnNextStart.Keep,
 ) : AgentConfiguration {
     override fun runMode() = runMode
     override fun repeatInterval() = repeatInterval
-    override fun onNextStart() = onNextStart
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl

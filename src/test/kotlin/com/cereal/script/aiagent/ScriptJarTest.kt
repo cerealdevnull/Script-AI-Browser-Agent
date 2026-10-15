@@ -26,6 +26,8 @@ import kotlin.reflect.full.memberFunctions
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -50,6 +52,7 @@ class ScriptJarTest {
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
         assertTrue(functions.getValue("secrets").returnType.isMarkedNullable)
         assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
+        assertFalse("onNextStart" in functions)
         val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
         assertFalse(row.returnType.isMarkedNullable)
         val secretRow = loader.loadClass("${configClass.name}\$NamedSecret").kotlin.memberFunctions.associateBy { it.name }
@@ -103,6 +106,14 @@ class ScriptJarTest {
                 val (watching, met) = host.notifications.map { it.message }
                 assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
                 assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
+
+                // The task menu's resets: the host calls the jar's TaskAction objects through the SDK interface.
+                val cacheKey = ReplayCache.key(values.getValue("goal") as String, site.url(), emptyList())
+                assertNotNull(runBlocking { provider.preference().getString(cacheKey) })
+                val actions = script.taskActions().associateBy { it.name }
+                assertEquals(listOf("Forget learned steps", "Forget learned steps and sign out"), actions.keys.toList())
+                assertEquals("Forgot learned steps and sign-ins", runBlocking { actions.getValue("Forget learned steps and sign out").run(config, provider) })
+                assertNull(runBlocking { provider.preference().getString(cacheKey) })
             }
         }
     }

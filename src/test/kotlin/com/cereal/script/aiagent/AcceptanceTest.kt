@@ -107,7 +107,6 @@ class G1MonitorTest {
                 model = ACCEPTANCE_MODEL,
                 runMode = RunMode.Repeat,
                 repeatInterval = 60,
-                onNextStart = OnNextStart.ForgetSteps,
             )
 
         AcceptanceTask("G1", config, host, traffic).use {
@@ -152,7 +151,7 @@ class G2LoginReadTest {
 
     private fun latestInvoice(): JsonObject = Demo.api.invoices(token)["data"]!!.jsonArray.maxBy { it.jsonObject["invoice_date"]!!.jsonPrimitive.content }.jsonObject
 
-    private fun config(goal: String, runMode: RunMode, forget: Boolean) =
+    private fun config(goal: String, runMode: RunMode) =
         TestConfig(
             goal = goal,
             startUrl = Demo.url,
@@ -160,12 +159,11 @@ class G2LoginReadTest {
             model = ACCEPTANCE_MODEL,
             secrets = Demo.secrets,
             runMode = runMode,
-            onNextStart = if (forget) OnNextStart.ForgetSteps else OnNextStart.Keep,
         )
 
     @Test
     fun `G2 notifies the latest invoice's number, date and total and never sends the password to the model`() {
-        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once, forget = true), host, traffic).use {
+        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once), host, traffic).use {
             val stats = run("Once (learn)")
             assertIs<ExecutionResult.Success>(stats.result, stats.result.message)
             stats.assertCacheReadsOnLaterSteps()
@@ -191,7 +189,7 @@ class G2LoginReadTest {
         val number = latestInvoice()["invoice_number"]!!.jsonPrimitive.content
         val goal = "Log in and notify me when the invoice number of my most recent order is no longer $number"
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat, forget = true), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, traffic).use {
             val learned = run("Repeat run 1 (learn)")
             assertIs<ExecutionResult.Loop>(learned.result, learned.result.message)
             learned.assertCacheReadsOnLaterSteps()
@@ -201,7 +199,7 @@ class G2LoginReadTest {
             "run 1 wrote no replay cache: ${host.logs.filter { "replay cache" in it }}",
         )
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat, forget = false), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, traffic).use {
             val replay = run("Repeat run 2 (replay, fresh profile)")
             assertIs<ExecutionResult.Loop>(replay.result, replay.result.message)
             assertEquals(0, replay.steps, "the replay called the model: ${host.logs.filter { "replay miss" in it }}")
@@ -247,7 +245,6 @@ class G3BuyTest {
                 apiKey = Secret(key),
                 model = ACCEPTANCE_MODEL,
                 secrets = Demo.secrets,
-                onNextStart = OnNextStart.ForgetSteps,
             ),
             host,
             traffic,

@@ -76,8 +76,7 @@ class FormLayoutTest {
         assertEquals(listOf("provider", "apiKey", "model", "baseUrl"), bySection["provider"])
         assertEquals(listOf("secrets"), bySection["secrets"])
         assertEquals(listOf("allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost"), bySection["advanced"])
-        // Unsectioned fields render first, so only On next start (on its way out) may stay there.
-        assertTrue(bySection[""].orEmpty().all { it == "onNextStart" }, bySection[""].toString())
+        assertEquals(null, bySection[""], "unsectioned fields render first")
     }
 
     @Test

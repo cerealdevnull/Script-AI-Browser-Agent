@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.Script
+import com.cereal.sdk.TaskAction
 import com.cereal.sdk.component.ComponentProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -65,9 +66,6 @@ internal class AgentScript(
     // True until the first execute() after a task start.
     private var firstRun = true
 
-    // The status line of the reset this task start did (On next start), or null.
-    private var reset: String? = null
-
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean =
         logged(provider) { start(configuration, provider) }
@@ -105,7 +103,6 @@ internal class AgentScript(
         capWarned = false
         priceAnnounced = false
         firstRun = true
-        reset = if (configError == null) onNextStart(configuration, provider) else null
         return true
     }
 
@@ -118,7 +115,6 @@ internal class AgentScript(
         configError?.let { return report.error(it, cost = COST_ZERO) }
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
-        if (firstRun) reset?.let { log.info(it); statusUpdate(it) }
         val model = newModelClient(configuration)
         if (!checked) preflight(configuration, model, report, statusUpdate) { log.warn(scrubber.forLog(it)) }?.let { return it }
         val browser =
@@ -272,7 +268,6 @@ internal class AgentScript(
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
         val badStartUrl = firstRun && outcome is Outcome.Failed && outcome.startPage
-        val learnedFromScratch = reset?.takeIf { firstRun }?.let { LEARNED_FROM_SCRATCH }
         firstRun = false
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && !badStartUrl && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
@@ -326,7 +321,6 @@ internal class AgentScript(
                     FORGET_STEPS.takeIf { stale },
                     answer.getOrNull(1),
                     readouts,
-                    listOfNotNull(learnedFromScratch),
                     cost = if (repeat) total() else cost(),
                 )
                 // A Once run that answers "not met" still completed its job.
@@ -485,24 +479,32 @@ internal class AgentScript(
         return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
 
-    /**
-     * Acts only when On next start changed since the last task start (none stored = Keep), so it acts once per pick.
-     * Returns the status line of what it reset, or null.
-     */
-    private suspend fun onNextStart(config: AgentConfiguration, provider: ComponentProvider): String? {
-        val prefs = provider.preference()
-        val choice = config.onNextStart()
-        if ((prefs.getString(ON_NEXT_START_KEY) ?: OnNextStart.Keep.name) == choice.name) return null
-        prefs.setString(ON_NEXT_START_KEY, choice.name)
-        if (choice == OnNextStart.Keep) return null
-        prefs.delete(cacheKey(config))
-        if (choice == OnNextStart.ForgetStepsAndSignOut) {
-            val taskId = prefs.getString(TASK_ID_KEY)
-            // Every Chrome profile of this task (one per set of secrets).
-            if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
+    // Resets, from the task's menu while it's stopped (the host never runs them during a run).
+    override fun taskActions(): List<TaskAction<AgentConfiguration>> =
+        listOf(
+            reset("Forget learned steps", "Forgot learned steps", "The next start learns the steps again, which costs model calls.") { config, provider ->
+                provider.preference().delete(cacheKey(config))
+            },
+            reset(
+                "Forget learned steps and sign out",
+                "Forgot learned steps and sign-ins",
+                "The next start learns the steps again, which costs model calls, and you must sign in to the site again.",
+            ) { config, provider ->
+                val prefs = provider.preference()
+                prefs.delete(cacheKey(config))
+                val taskId = prefs.getString(TASK_ID_KEY)
+                // Every Chrome profile of this task (one per set of secrets).
+                if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
+            },
+        )
+
+    private fun reset(name: String, done: String, confirm: String, block: suspend (AgentConfiguration, ComponentProvider) -> Unit) =
+        object : TaskAction<AgentConfiguration> {
+            override val name = name
+            override val confirm = confirm
+
+            override suspend fun run(configuration: AgentConfiguration, provider: ComponentProvider): String = done.also { block(configuration, provider) }
         }
-        return choice.status
-    }
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secretsByName().keys)
 
@@ -539,13 +541,9 @@ private fun keyRejected(config: AgentConfiguration): String {
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
-// A task's settings can't be edited after it's created, so a fresh start means a duplicate:
-// new task id, no learned steps, clean Chrome profile.
-internal const val FORGET_STEPS = "Duplicate the task and start the copy. The copy starts without learned steps and signs you out of the site."
-internal const val FORGET_AND_SIGN_OUT = FORGET_STEPS
+internal const val FORGET_STEPS = "Pick Forget learned steps in the task's menu, then start the task again."
+internal const val FORGET_AND_SIGN_OUT = "Pick Forget learned steps and sign out in the task's menu, then start the task again."
 private const val TASK_ID_KEY = "taskId"
-private const val ON_NEXT_START_KEY = "onNextStart"
-private const val LEARNED_FROM_SCRATCH = "Learned from scratch (reset at start)."
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
 private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 2px solid #c4c8cf; border-radius: 10px; font-weight: 600; text-decoration: none"

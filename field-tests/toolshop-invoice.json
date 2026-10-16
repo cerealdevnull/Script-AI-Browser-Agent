@@ -1,0 +1,15 @@
+{
+  "id": "toolshop-invoice",
+  "startUrl": "https://practicesoftwaretesting.com",
+  "goal": "Log in and tell me the invoice number, date and total of my most recent order",
+  "mode": "Once",
+  "expected": [
+    "One notification whose headline is the answer, not \"Goal met\"",
+    "It names the newest invoice's number (INV-…), its date as yyyy-mm-dd, and its total",
+    "The run uses at most 10 steps"
+  ],
+  "secrets": {
+    "email": "TOOLSHOP_EMAIL",
+    "password": "TOOLSHOP_PASSWORD"
+  }
+}

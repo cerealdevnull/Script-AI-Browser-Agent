@@ -81,7 +81,7 @@ the defaults in `AgentConfiguration.kt` and update spec #69.
 ## Smoke check on real sites (not pass/fail)
 
 `SmokeTest` runs the real script on five real sites, to find what breaks outside Toolshop. It uses
-`gemini-3.5-flash-lite` through the OpenAI-compatible provider (a few cents in total) and skips itself without
+`gemini-3.8-flash` (the Gemini preset's recommended model) through the OpenAI-compatible provider (cents per site) and skips itself without
 `GEMINI_API_KEY`. The goals are read-only and every confirmation is declined. For each site it writes the log,
 the notifications and every model request and response to `build/smoke/<id>/`, to be judged afterwards.
 
@@ -89,7 +89,13 @@ the notifications and every model request and response to `build/smoke/<id>/`, t
 read -s "GEMINI_API_KEY?Gemini API key: " && export GEMINI_API_KEY
 ./gradlew acceptanceTest --tests '*SmokeTest'
 SMOKE_ONLY=nike,ad ./gradlew acceptanceTest --tests '*SmokeTest'   # a subset
+SMOKE_FILE=field-tests/toolshop-invoice.json ./gradlew acceptanceTest --tests '*SmokeTest'   # one goal of your own
 ```
+
+A field-test file (`field-tests/<id>.json`, fields in `FieldTest` in `SmokeTest.kt`) holds the goal, start URL, run
+mode, the expected result, and for a goal that signs in, each sign-in secret's label mapped to the environment variable
+holding its value. `./gradlew test` checks that every file parses. The `/field-test` skill (`.claude/skills/field-test/`)
+runs a file and judges the run against its expected result.
 
 Results on 2026-10-11 (`gemini-3.5-flash-lite`, script commit c69d50a). The Gemini free tier answered a few
 requests with 429. The script retried them, so they caused no failures.

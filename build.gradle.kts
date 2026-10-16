@@ -134,6 +134,7 @@ tasks.withType<Test>().configureEach {
 
 tasks.test {
     useJUnitPlatform { excludeTags("scriptJar", "acceptance") }
+    inputs.dir("field-tests") // FieldTestFileTest parses them: an edited file reruns the tests
 }
 
 // Opt-in acceptance runs on a real claude-opus-5-5 and Toolshop (docs/acceptance.md). They cost money and skip

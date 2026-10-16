@@ -2,6 +2,8 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
@@ -9,16 +11,17 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Tag
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertTrue
 
 /**
  * Manual smoke check (docs/acceptance.md): the real script on real sites, to find what breaks outside Toolshop.
- * Runs on gemini-3.5-flash-lite (cheap) through the Custom provider (so the traffic proxy can sit in between); skips without GEMINI_API_KEY.
+ * Runs on gemini-3.8-flash (the Gemini preset's recommended model) through the Custom provider (so the traffic proxy can sit in between); skips without GEMINI_API_KEY.
  * Not pass/fail: every site's log and model traffic land in build/smoke/<id>/ to be judged afterwards.
  * Read-only goals, and any confirmation is declined. Rerun a subset with SMOKE_ONLY=nike,ad.
  */
 @Tag("acceptance")
 class SmokeTest {
-    private class Site(val id: String, val url: String, val goal: String, val mode: RunMode, val runs: Int = 1)
+    class Site(val id: String, val url: String, val goal: String, val mode: RunMode, val runs: Int = 1, val secrets: List<Pair<String?, Secret?>> = emptyList())
 
     private val sites =
         listOf(
@@ -34,13 +37,16 @@ class SmokeTest {
     fun `smoke check on real sites`() {
         val key = env("GEMINI_API_KEY").also { assumeTrue(it != null, "GEMINI_API_KEY not set: smoke check skipped") }!!
         val only = env("SMOKE_ONLY")?.split(",")?.map { it.trim() }
-        for (site in sites.filter { only == null || it.id in only }) {
+        // A field-test file (the /field-test skill) replaces the fixed list.
+        val chosen = env("SMOKE_FILE")?.let { listOf(FieldTest.read(File(it)).site()) } ?: sites.filter { only == null || it.id in only }
+        for (site in chosen) {
             val host = Host().apply { repeat(5) { dialogAnswers += declineClicked } }
             ModelTraffic(GEMINI).use { traffic ->
                 val config =
                     TestConfig(
                         goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
                         baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode,
+                        secrets = site.secrets,
                     )
                 val script = AgentScript(profilesDir = tempProfiles())
                 val provider = host.create()
@@ -66,7 +72,42 @@ class SmokeTest {
     }
 
     private companion object {
-        const val MODEL = "gemini-3.5-flash-lite"
+        const val MODEL = "gemini-3.8-flash"
         const val GEMINI = "https://generativelanguage.googleapis.com/v1beta/openai"
+    }
+}
+
+/** A field-test file (`field-tests/<id>.json`): one goal for [SmokeTest] to run and the /field-test skill to judge. */
+@Serializable
+class FieldTest(
+    val id: String,
+    val startUrl: String,
+    val goal: String,
+    val mode: RunMode = RunMode.Once,
+    val runs: Int = if (mode == RunMode.Repeat) 3 else 1,
+    /** What a correct run produces, one checkable line each. The skill judges against these; the test never reads them. */
+    val expected: List<String>,
+    /** Sign-in secret label to the environment variable holding its value; the file never holds a value. */
+    val secrets: Map<String, String> = emptyMap(),
+) {
+    init {
+        require(expected.isNotEmpty()) { "$id: expected is empty" }
+    }
+
+    fun site() =
+        SmokeTest.Site(id, startUrl, goal, mode, runs, secrets.map { (label, variable) -> label to Secret(env(variable) ?: error("$id: $variable is not set (secret '$label')")) })
+
+    companion object {
+        fun read(file: File): FieldTest = Json.decodeFromString(file.readText())
+    }
+}
+
+/** Every committed field-test file parses, so a typo fails `./gradlew test` instead of a paid run. */
+class FieldTestFileTest {
+    @Test
+    fun `field-test files parse`() {
+        val files = File("field-tests").listFiles { f -> f.extension == "json" }.orEmpty()
+        assertTrue(files.isNotEmpty(), "no .json files in field-tests/")
+        files.forEach { runCatching { FieldTest.read(it) }.onFailure { e -> throw AssertionError("${it.name}: ${e.message}", e) } }
     }
 }

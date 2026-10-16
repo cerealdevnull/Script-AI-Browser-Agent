@@ -108,7 +108,7 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     /** Back in history; on a followed tab with no history, closes it (the next [follow] returns to its opener). */
     suspend fun goBack() {
         if (tab.targetId in followed && (tab.rawEvaluate("history.length") as? JsonPrimitive)?.contentOrNull == "1") {
-            browser.connection!!.target.closeTarget(tab.targetId!!)
+            close(tab.targetId!!)
             return
         }
         tab.back()
@@ -151,12 +151,18 @@ class Browser private constructor(private val browser: KBrowser, private val pag
     /** True when the current tab closed since the last [follow] (an action can't run there). */
     suspend fun tabClosed(): Boolean = pages().none { it.targetId == tab.targetId }
 
+    /** Chrome closes a tab asynchronously (after its unload handlers), so this waits until it is gone from the targets. */
+    private suspend fun close(targetId: String) {
+        browser.connection!!.target.closeTarget(targetId)
+        withTimeoutOrNull(pageLoadTimeoutMs) { while (pages().any { it.targetId == targetId }) delay(50) }
+    }
+
     private suspend fun pages() = browser.connection!!.target.getTargets().targetInfos.filter { it.type == "page" }
 
     /** At the start of a goal run: closes every tab the agent followed and makes the original tab current again. */
     suspend fun reset() {
         val open = pages().map { it.targetId }.toSet()
-        followed.filter { it in open }.forEach { browser.connection!!.target.closeTarget(it) }
+        followed.filter { it in open }.forEach { close(it) }
         followed.clear()
         if (current != null) invalidateRefs()
         current = null

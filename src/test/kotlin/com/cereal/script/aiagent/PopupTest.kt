@@ -146,6 +146,9 @@ class PopupTest {
 
     @Test
     fun `go_back on a followed tab closes it and returns to the opener`() {
+        // A slow unload keeps the closed tab listed for a while, as on a loaded CI machine.
+        site.pages["product.html"] = javaClass.getResource("/fixtures/product.html")!!.readText()
+            .replace("</body>", "<script>addEventListener('pagehide', () => { const t = Date.now(); while (Date.now() - t < 500); })</script></body>")
         val model =
             ScriptedModel(
                 click("link", "Long Nose Pliers"),

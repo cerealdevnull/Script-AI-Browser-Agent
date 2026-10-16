@@ -45,7 +45,7 @@ class SmokeTest {
                 val config =
                     TestConfig(
                         goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
-                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode, onNextStart = OnNextStart.ForgetSteps,
+                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode,
                         secrets = site.secrets,
                     )
                 val script = AgentScript(profilesDir = tempProfiles())
@@ -87,12 +87,11 @@ class FieldTest(
     val runs: Int = if (mode == RunMode.Repeat) 3 else 1,
     /** What a correct run produces, one checkable line each. The skill judges against these; the test never reads them. */
     val expected: List<String>,
-    /** Secret slot label to the environment variable holding its value; the file never holds a value. */
+    /** Sign-in secret label to the environment variable holding its value; the file never holds a value. */
     val secrets: Map<String, String> = emptyMap(),
 ) {
     init {
         require(expected.isNotEmpty()) { "$id: expected is empty" }
-        require(secrets.size <= 3) { "$id: at most 3 secrets, the config has 3 secret slots" }
     }
 
     fun site() =

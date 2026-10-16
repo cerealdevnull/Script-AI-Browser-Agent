@@ -35,7 +35,6 @@ class RepeatTest {
         goal: String = GOAL,
         startPath: String = "",
         secrets: List<Pair<String, Secret>> = emptyList(),
-        onNextStart: OnNextStart = OnNextStart.Keep,
         maxTaskCost: Double = 10.0,
         repeatInterval: Int = 7,
     ) = TestConfig(
@@ -44,7 +43,6 @@ class RepeatTest {
         runMode = RunMode.Repeat,
         repeatInterval = repeatInterval,
         secrets = secrets,
-        onNextStart = onNextStart,
         maxTaskCost = maxTaskCost,
     )
 
@@ -103,18 +101,6 @@ class RepeatTest {
         task(model, config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
             assertEquals("Not yet · checked 14:32 · next 14:47 · unknown (no price for llama3) of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
         }
-    }
-
-    @Test
-    fun `the reset note shows only on the first check's result`() {
-        stock("Out of stock")
-
-        task(learning(), config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
-            assertIs<ExecutionResult.Loop>(execute())
-            stock("In stock")
-            assertIs<ExecutionResult.Success>(execute())
-        }
-        assertFalse("Learned from scratch" in host.notifications.last().message, host.notifications.last().message)
     }
 
     @Test
@@ -577,7 +563,7 @@ class RepeatTest {
 
         assertEquals(5, model.requests.size)
         assertEquals(
-            "Couldn't find something on the page to watch.\nPick “Forget learned steps” in On next start, then start the task again.\nCost: \$0.02",
+            "Couldn't find something on the page to watch.\nPick Forget learned steps in the task's menu, then start the task again.\nCost: \$0.02",
             host.notifications.last().message,
         )
     }
@@ -594,31 +580,20 @@ class RepeatTest {
     }
 
     @Test
-    fun `Forget learned steps acts once, at the task start where it was picked, and an edited goal has its own entry`() {
+    fun `Forget learned steps makes the next start re-learn, and an edited goal has its own entry`() {
         stock("Out of stock")
         task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertNotNull(cache())
 
         val edited = "$GOAL, please"
         assertNull(cache(edited))
-        val relearning = learning()
-        host.statuses.clear()
-        task(relearning, config(onNextStart = OnNextStart.ForgetSteps)) { execute ->
-            assertNull(cache(), "the entry was deleted at task start")
-            repeat(2) { assertIs<ExecutionResult.Loop>(execute()) }
-        }
-        assertEquals(2, relearning.requests.size, "the second check replayed")
-        assertEquals("Forgot learned steps", host.statuses.first())
-        assertEquals(1, host.statuses.count { it == "Forgot learned steps" }, "a Repeat check never resets: ${host.statuses}")
-        assertEquals(1, host.logs.count { "Forgot learned steps" in it }, host.logs.toString())
-        assertNotNull(cache())
+        assertEquals("Forgot learned steps", runBlocking { host.act(AgentScript(profilesDir = profiles), "Forget learned steps", config()) })
+        assertNull(cache())
 
-        // The next start with the same choice keeps what was learned.
-        val again = ScriptedModel()
-        host.statuses.clear()
-        task(again, config(onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
-        assertTrue(again.requests.isEmpty())
-        assertFalse("Forgot learned steps" in host.statuses)
+        val relearning = learning()
+        task(relearning) { execute -> repeat(2) { assertIs<ExecutionResult.Loop>(execute()) } }
+        assertEquals(2, relearning.requests.size, "the second check replayed")
+        assertNotNull(cache())
     }
 
     @Test
@@ -695,8 +670,9 @@ class RepeatTest {
         )
 
         site.pages.remove("index.html")
+        runBlocking { host.act(AgentScript(profilesDir = profiles), "Forget learned steps", config()) }
         val restarted = learning()
-        task(restarted, config(maxTaskCost = 0.02, onNextStart = OnNextStart.ForgetSteps)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
+        task(restarted, config(maxTaskCost = 0.02)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertEquals(2, restarted.requests.size, "a restart resets the task total")
     }
 

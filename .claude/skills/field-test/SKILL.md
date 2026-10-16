@@ -25,7 +25,7 @@ Hold each field to its job:
   value the notification must say ("the price is €89,99"). For `Repeat`, whether the condition holds now (run 1
   notifies, or stays silent and returns `Loop`) and that replays make 0 model calls. Rewrite a fuzzy line ("it should
   work") with the user; open the start URL in the browser pane to find the real value when they don't know it.
-- **secrets** maps each secret slot label (`email`, `password`, at most three) to the environment variable that holds
+- **secrets** maps each sign-in secret label (`email`, `password`) to the environment variable that holds
   its value. The file holds names only, so it can be committed.
 
 Done when the file passes `./gradlew test --tests '*FieldTestFileTest'` and every `expected` line is checkable.

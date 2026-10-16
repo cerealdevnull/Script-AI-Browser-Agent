@@ -17,10 +17,10 @@ class ProfileTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>, onNextStart: OnNextStart = OnNextStart.Keep) =
-        runBlocking {
-            host.run(AgentScript({ ScriptedModel(*turns) }, profiles), TestConfig(goal = goal, startUrl = site.url("session.html"), onNextStart = onNextStart))
-        }
+    private fun config(goal: String) = TestConfig(goal = goal, startUrl = site.url("session.html"))
+
+    private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>) =
+        runBlocking { host.run(AgentScript({ ScriptedModel(*turns) }, profiles), config(goal)) }
 
     private fun finish(): List<ToolCall> = listOf(call("finish", """{"goal_met": true, "summary": "ok"}"""))
 
@@ -49,19 +49,37 @@ class ProfileTest {
     }
 
     @Test
-    fun `Forget learned steps and sign out starts signed out and says so`() {
+    fun `Forget learned steps and sign out makes the next start sign in from scratch`() {
         val task = Host()
         val signIn: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
         assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
-        task.statuses.clear()
 
-        assertIs<ExecutionResult.Success>(
-            run(task, "Sign in", { assertTrue("Signed out" in it.lastText, it.lastText).let { finish() } }, onNextStart = OnNextStart.ForgetStepsAndSignOut),
-        )
-        assertEquals("Forgot learned steps and sign-ins", task.statuses.first())
-        val message = task.notifications.last().message
-        assertTrue("Learned from scratch (reset at start)." in message, message)
-        assertFalse((task.statuses + message).any { "rofile" in it }, "user text names the profile")
+        val result = runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps and sign out", config("Sign in")) }
+        assertEquals("Forgot learned steps and sign-ins", result)
+        assertFalse("rofile" in result!!, "user text names the profile")
+
+        // No learned steps left (the model is asked) and no sign-in left (the page shows Signed out).
+        assertIs<ExecutionResult.Success>(run(task, "Sign in", { assertTrue("Signed out" in it.lastText, it.lastText).let { finish() } }))
+    }
+
+    @Test
+    fun `Forget learned steps keeps the sign-in`() {
+        val task = Host()
+        val signIn: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
+        assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
+
+        assertEquals("Forgot learned steps", runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps", config("Sign in")) })
+
+        assertIs<ExecutionResult.Success>(run(task, "Sign in", { assertTrue("Signed in" in it.lastText, it.lastText).let { finish() } }))
+    }
+
+    @Test
+    fun `both resets ask first, saying re-learning costs model calls, and signing out says to sign in again`() {
+        val actions = AgentScript(profilesDir = profiles).taskActions().associate { it.name to it.confirm!! }
+        assertEquals(listOf("Forget learned steps", "Forget learned steps and sign out"), actions.keys.toList())
+        assertTrue(actions.values.all { "model calls" in it }, actions.toString())
+        assertFalse("sign in" in actions.getValue("Forget learned steps"))
+        assertTrue("sign in to the site again" in actions.getValue("Forget learned steps and sign out"))
     }
 }
 

@@ -10,7 +10,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** Secret slots: typed by name through type_secret, never shown to the model or the logs. */
+/** Sign-in secrets: typed by name through type_secret, never shown to the model or the logs. */
 class SecretsTest {
     private val site = FixtureServer()
     private val host = Host()
@@ -128,14 +128,13 @@ class SecretsTest {
     }
 
     @Test
-    fun `type_secret into a non-text element or an unknown slot is a tool error`() {
+    fun `type_secret into a non-text element is a tool error`() {
         val model =
             ScriptedModel(
                 {
                     listOf(
                         call("type_secret", """{"ref": ${it.ref("button", "Login")}, "field": "email"}"""),
                         call("type_secret", """{"ref": ${it.ref("checkbox", "Remember me")}, "field": "email"}"""),
-                        call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "pin"}"""),
                     )
                 },
                 {
@@ -143,7 +142,6 @@ class SecretsTest {
                     assertTrue(results.all { r -> r.isError }, results.joinToString { r -> r.text })
                     assertTrue("not an editable text input" in results[0].text, results[0].text)
                     assertTrue("not an editable text input" in results[1].text, results[1].text)
-                    assertEquals("error: unknown secret 'pin'; available: email, password", results[2].text)
                     listOf(call("fail", """{"reason": "x"}"""))
                 },
             )
@@ -151,6 +149,17 @@ class SecretsTest {
         run(model)
 
         assertEquals(2, model.requests.size)
+    }
+
+    @Test
+    fun `a goal using a secret that isn't in the list fails, naming it`() {
+        val model = ScriptedModel({ listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "pin"}""")) })
+
+        val result = run(model)
+
+        assertIs<ExecutionResult.Error>(result)
+        assertTrue("'pin'" in result.message && "Sign-in secrets" in result.message, result.message)
+        assertEquals(1, model.requests.size)
     }
 
     @Test

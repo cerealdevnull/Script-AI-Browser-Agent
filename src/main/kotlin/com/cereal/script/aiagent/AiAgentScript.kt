@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.Script
+import com.cereal.sdk.TaskAction
 import com.cereal.sdk.component.ComponentProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -65,9 +66,6 @@ internal class AgentScript(
     // True until the first execute() after a task start.
     private var firstRun = true
 
-    // The status line of the reset this task start did (On next start), or null.
-    private var reset: String? = null
-
     // onStart can only answer true/false (false shows a generic host error), so the first execute() reports it.
     override suspend fun onStart(configuration: AgentConfiguration, provider: ComponentProvider): Boolean =
         logged(provider) { start(configuration, provider) }
@@ -105,7 +103,6 @@ internal class AgentScript(
         capWarned = false
         priceAnnounced = false
         firstRun = true
-        reset = if (configError == null) onNextStart(configuration, provider) else null
         return true
     }
 
@@ -118,7 +115,6 @@ internal class AgentScript(
         configError?.let { return report.error(it, cost = COST_ZERO) }
         val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
         val log = provider.logger()
-        if (firstRun) reset?.let { log.info(it); statusUpdate(it) }
         val model = newModelClient(configuration)
         if (!checked) preflight(configuration, model, report, statusUpdate) { log.warn(scrubber.forLog(it)) }?.let { return it }
         val browser =
@@ -157,7 +153,7 @@ internal class AgentScript(
                         } catch (e: ModelException) {
                             if (e.status != 401 && e.status != 403) throw e
                             log.error(scrubber.forLog(e.message.orEmpty()))
-                            throw ModelException(keyRejected(configuration), status = e.status)
+                            throw ModelException(keyRejected(configuration.provider()), status = e.status)
                         }
                 },
                 configuration.goal(),
@@ -165,7 +161,7 @@ internal class AgentScript(
                 caps,
                 { log.info(scrubber.forLog(it)) },
                 { log.warn(scrubber.forLog(it)) },
-                configuration.secrets(),
+                configuration.secretsByName(),
                 scrubber,
                 configuration.allowedDomainSet(),
                 {
@@ -272,7 +268,6 @@ internal class AgentScript(
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
         val badStartUrl = firstRun && outcome is Outcome.Failed && outcome.startPage
-        val learnedFromScratch = reset?.takeIf { firstRun }?.let { LEARNED_FROM_SCRATCH }
         firstRun = false
         transientFailures = if (outcome is Outcome.Failed && outcome.transient) transientFailures + 1 else 0
         if (repeat && !badStartUrl && transientFailures in 1 until MAX_TRANSIENT_FAILURES) {
@@ -326,7 +321,6 @@ internal class AgentScript(
                     FORGET_STEPS.takeIf { stale },
                     answer.getOrNull(1),
                     readouts,
-                    listOfNotNull(learnedFromScratch),
                     cost = if (repeat) total() else cost(),
                 )
                 // A Once run that answers "not met" still completed its job.
@@ -363,13 +357,13 @@ internal class AgentScript(
         warn: (String) -> Unit,
     ): ExecutionResult? {
         statusUpdate("Checking your API key and model")
-        val who = who(config)
+        val who = who(config.provider())
         val id = config.modelId()
         val clear = if (config.provider() == Provider.Custom) "Pick another Model" else "Clear Model to use the recommended one"
         val problem =
             try {
                 when (model.check()) {
-                    Preflight.BadKey -> keyRejected(config)
+                    Preflight.BadKey -> keyRejected(config.provider())
                     Preflight.UnknownModel -> "${who.replaceFirstChar(Char::uppercase)} has no model called `$id`. $clear, or check the spelling."
                     Preflight.NoTools -> "`$id` can't control the browser here. $clear."
                     null -> null.also { checked = true }
@@ -435,7 +429,7 @@ internal class AgentScript(
 
     /**
      * A result notification: the headline (also the final status line unless [status] is false), an optional action
-     * line, summary, Readouts and notes (success only), then the cost line, with the run's page link. Raw causes (HTTP
+     * line, summary and Readouts, then the cost line, with the run's page link. Raw causes (HTTP
      * bodies, exception text) go to the log, not here.
      */
     private inner class Report(val config: AgentConfiguration, val provider: ComponentProvider, val statusUpdate: suspend (String) -> Unit) {
@@ -447,12 +441,11 @@ internal class AgentScript(
             action: String? = null,
             summary: String? = null,
             readouts: List<Pair<String, String>> = emptyList(),
-            notes: List<String> = emptyList(),
             cost: String? = null,
             status: Boolean = true,
         ) {
             if (status) statusUpdate(headline)
-            notify(config, provider, ResultMessage(kind, headline, action, summary, readouts, notes, cost, url))
+            notify(config, provider, ResultMessage(kind, headline, action, summary, readouts, cost, url))
         }
 
         suspend fun error(headline: String, action: String? = null, cost: String): ExecutionResult {
@@ -468,7 +461,6 @@ internal class AgentScript(
 
     // Every error at once, in the words shown at Save. ponytail: upgrade to a host onStart message if Cereal ships one (Ask 8).
     private fun validate(config: AgentConfiguration): String? {
-        val slots = config.secretSlots()
         val errors =
             listOfNotNull(
                 // The host throws for a required item with no value, and a throw from onStart reaches the user without its message.
@@ -481,33 +473,39 @@ internal class AgentScript(
                 positiveError("Max \$ per run", config.maxRunCost()),
                 positiveError("Max \$ per task", config.maxTaskCost()),
                 positiveError("Check every", config.repeatInterval()).takeIf { config.runMode() == RunMode.Repeat },
-            ) +
-                // Only the slots the form shows (as SecretState): slot 1, or slot N once slot N-1 has a label.
-                slots.indices.filter { i -> i == 0 || slots[i - 1].first != null }.flatMap { i -> secretSlotErrors(slots, i).toList().filterNotNull() }
+            ) + secretRowErrors(config.secretRows())
         if (errors.isEmpty()) return null
         return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
 
-    /**
-     * Acts only when On next start changed since the last task start (none stored = Keep), so it acts once per pick.
-     * Returns the status line of what it reset, or null.
-     */
-    private suspend fun onNextStart(config: AgentConfiguration, provider: ComponentProvider): String? {
-        val prefs = provider.preference()
-        val choice = config.onNextStart()
-        if ((prefs.getString(ON_NEXT_START_KEY) ?: OnNextStart.Keep.name) == choice.name) return null
-        prefs.setString(ON_NEXT_START_KEY, choice.name)
-        if (choice == OnNextStart.Keep) return null
-        prefs.delete(cacheKey(config))
-        if (choice == OnNextStart.ForgetStepsAndSignOut) {
-            val taskId = prefs.getString(TASK_ID_KEY)
-            // Every Chrome profile of this task (one per set of secrets).
-            if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
-        }
-        return choice.status
-    }
+    // Resets, from the task's menu while it's stopped (the host never runs them during a run).
+    override fun taskActions(): List<TaskAction<AgentConfiguration>> =
+        listOf(
+            reset("Forget learned steps", "Forgot learned steps", "The next start learns the steps again, which costs model calls.") { config, provider ->
+                provider.preference().delete(cacheKey(config))
+            },
+            reset(
+                "Forget learned steps and sign out",
+                "Forgot learned steps and sign-ins",
+                "The next start learns the steps again, which costs model calls, and you must sign in to the site again.",
+            ) { config, provider ->
+                val prefs = provider.preference()
+                prefs.delete(cacheKey(config))
+                val taskId = prefs.getString(TASK_ID_KEY)
+                // Every Chrome profile of this task (one per set of secrets).
+                if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
+            },
+        )
 
-    private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secrets().keys)
+    private fun reset(name: String, done: String, confirm: String, block: suspend (AgentConfiguration, ComponentProvider) -> Unit) =
+        object : TaskAction<AgentConfiguration> {
+            override val name = name
+            override val confirm = confirm
+
+            override suspend fun run(configuration: AgentConfiguration, provider: ComponentProvider): String = done.also { block(configuration, provider) }
+        }
+
+    private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secretsByName().keys)
 
     // Keyed by a task id the script stores in the task's own preferences (new task, new id: a deleted task's profile is
     // never reused) plus a hash of the secrets (another account gets its own cookies). Rewording the goal keeps sign-ins.
@@ -515,7 +513,7 @@ internal class AgentScript(
     private suspend fun profileName(config: AgentConfiguration, provider: ComponentProvider): String {
         val prefs = provider.preference()
         val taskId = prefs.getString(TASK_ID_KEY) ?: UUID.randomUUID().toString().also { prefs.setString(TASK_ID_KEY, it) }
-        val secrets = config.secrets().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }.toString()
+        val secrets = config.secretsByName().toSortedMap().map { (name, value) -> "$name=${value.reveal()}" }.toString()
         val hash = MessageDigest.getInstance("SHA-256").digest(secrets.toByteArray()).joinToString("") { "%02x".format(it) }
         return "$taskId-${hash.take(16)}"
     }
@@ -533,20 +531,19 @@ internal fun modelClient(config: AgentConfiguration): ModelClient {
 
 private fun AgentConfiguration.modelId() = model()?.trim()?.ifEmpty { null } ?: provider().recommendedModel!!
 
-private fun who(config: AgentConfiguration) = if (config.provider() == Provider.Custom) "your server" else config.provider().name
+internal fun who(provider: Provider) = if (provider == Provider.Custom) "your server" else provider.name
 
-private fun keyRejected(config: AgentConfiguration): String {
-    val from = config.provider().keyUrl?.let { "from $it " }.orEmpty()
-    return "${who(config).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
+/** The run's and the Model dropdown's message for a 401/403. */
+internal fun keyRejected(provider: Provider): String {
+    val from = provider.keyUrl?.let { "from $it " }.orEmpty()
+    return "${who(provider).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
 }
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
-internal const val FORGET_STEPS = "Pick “Forget learned steps” in On next start, then start the task again."
-internal const val FORGET_AND_SIGN_OUT = "Pick “Forget learned steps and sign out” in On next start, then start the task again."
+internal const val FORGET_STEPS = "Pick Forget learned steps in the task's menu, then start the task again."
+internal const val FORGET_AND_SIGN_OUT = "Pick Forget learned steps and sign out in the task's menu, then start the task again."
 private const val TASK_ID_KEY = "taskId"
-private const val ON_NEXT_START_KEY = "onNextStart"
-private const val LEARNED_FROM_SCRATCH = "Learned from scratch (reset at start)."
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
 private const val BUTTON = "flex: 1; text-align: center; padding: 14px; border: 2px solid #c4c8cf; border-radius: 10px; font-weight: 600; text-decoration: none"

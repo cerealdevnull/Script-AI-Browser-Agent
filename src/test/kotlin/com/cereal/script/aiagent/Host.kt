@@ -81,6 +81,10 @@ class Host : ComponentProviderFactory {
         TestScriptRunner(recording).run(config, this)
         return recording.last
     }
+
+    /** Runs the task action named [name] from the task's menu, like the host does while the task is stopped. */
+    suspend fun act(script: Script<AgentConfiguration>, name: String, config: AgentConfiguration): String? =
+        script.taskActions().single { it.name == name }.run(config, provider)
 }
 
 /** One task's preferences. TestPreferenceComponent shares one static map across every instance, i.e. across tasks. */
@@ -124,16 +128,14 @@ class TestConfig(
     val maxTaskCost: Double = 10.0,
     val provider: Provider = Provider.Anthropic,
     val model: String? = "claude-opus-5-5",
-    /** Secret slots 1..3 as (name, value). */
+    /** Sign-in secret rows as (label, value). */
     val secrets: List<Pair<String?, Secret?>> = emptyList(),
     val allowedDomains: List<String> = emptyList(),
     val runMode: RunMode = RunMode.Once,
     val repeatInterval: Int = 300,
-    val onNextStart: OnNextStart = OnNextStart.Keep,
 ) : AgentConfiguration {
     override fun runMode() = runMode
     override fun repeatInterval() = repeatInterval
-    override fun onNextStart() = onNextStart
     override fun goal() = goal
     override fun startUrl() = startUrl
     override fun baseUrl() = baseUrl
@@ -143,12 +145,13 @@ class TestConfig(
     override fun maxTaskCost() = maxTaskCost
     override fun provider() = provider
     override fun model() = model
-    override fun secret1Name() = secrets.getOrNull(0)?.first
-    override fun secret1Value() = secrets.getOrNull(0)?.second
-    override fun secret2Name() = secrets.getOrNull(1)?.first
-    override fun secret2Value() = secrets.getOrNull(1)?.second
-    override fun secret3Name() = secrets.getOrNull(2)?.first
-    override fun secret3Value() = secrets.getOrNull(2)?.second
+    override fun secrets() =
+        secrets.map { (l, v) ->
+            object : AgentConfiguration.NamedSecret {
+                override fun label() = l.orEmpty()
+                override fun value() = v ?: Secret("")
+            }
+        }.ifEmpty { null }
     override fun allowedDomains() =
         allowedDomains.map { d -> object : AgentConfiguration.AllowedDomain { override fun domain() = d } }.ifEmpty { null }
 }

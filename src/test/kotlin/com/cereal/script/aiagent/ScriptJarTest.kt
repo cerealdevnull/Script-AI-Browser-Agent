@@ -26,6 +26,8 @@ import kotlin.reflect.full.memberFunctions
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -48,10 +50,24 @@ class ScriptJarTest {
         val functions = configClass.kotlin.memberFunctions.associateBy { it.name }
         assertTrue(functions.getValue("baseUrl").returnType.isMarkedNullable)
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
-        assertTrue(functions.getValue("secret3Value").returnType.isMarkedNullable)
+        assertTrue(functions.getValue("secrets").returnType.isMarkedNullable)
         assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
+        assertFalse("onNextStart" in functions)
         val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
         assertFalse(row.returnType.isMarkedNullable)
+        val secretRow = loader.loadClass("${configClass.name}\$NamedSecret").kotlin.memberFunctions.associateBy { it.name }
+        assertEquals(Secret::class, secretRow.getValue("value").returnType.classifier)
+        assertFalse(secretRow.getValue("label").returnType.isMarkedNullable)
+        // The host gets the Model dropdown's source as the annotation's objectInstance.
+        val model = configClass.getMethod("model").getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)
+        val options = model.options.objectInstance ?: error("ModelOptions is no Kotlin object in the jar")
+        assertEquals(setOf("provider", "apiKey", "baseUrl"), options.dependsOn)
+        val empty =
+            object : com.cereal.sdk.statemodifier.ScriptConfig {
+                override fun valueForKey(key: String) = com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
+            }
+        val noKey = runCatching { runBlocking { options.load(empty) } }.exceptionOrNull()
+        assertEquals("Enter your API key to list models", noKey?.message, noKey?.stackTraceToString())
 
         FixtureServer().use { site ->
             MockWebServer().use { api ->
@@ -100,8 +116,50 @@ class ScriptJarTest {
                 val (watching, met) = host.notifications.map { it.message }
                 assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
                 assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
+
+                // The task menu's resets: the host calls the jar's TaskAction objects through the SDK interface.
+                val cacheKey = ReplayCache.key(values.getValue("goal") as String, site.url(), emptyList())
+                assertNotNull(runBlocking { provider.preference().getString(cacheKey) })
+                val actions = script.taskActions().associateBy { it.name }
+                assertEquals(listOf("Forget learned steps", "Forget learned steps and sign out"), actions.keys.toList())
+                assertEquals("Forgot learned steps and sign-ins", runBlocking { actions.getValue("Forget learned steps and sign out").run(config, provider) })
+                assertNull(runBlocking { provider.preference().getString(cacheKey) })
             }
         }
+    }
+
+    @Test
+    fun `the host can instantiate every form field's state modifier and options from the shrunk jar`() {
+        val manifest = ZipFile(jar).use { zip -> zip.getInputStream(zip.getEntry("manifest.json")).reader().readText() }
+        val loader = HostLikeScriptClassLoader(jar.toURI().toURL(), javaClass.classLoader)
+        val scriptClass = loader.loadClass(Json.parseToJsonElement(manifest).jsonObject["script"]!!.jsonPrimitive.content)
+        val configClass = scriptClass.genericInterfaces.filterIsInstance<ParameterizedType>()
+            .first { it.rawType == Script::class.java }.actualTypeArguments.single() as Class<*>
+
+        // Like the host's ScriptConfigurationDefinitionBuilder: a null objectInstance fails the whole form.
+        val items =
+            (listOf(configClass) + configClass.declaredClasses).flatMap { it.methods.toList() }
+                .mapNotNull { m -> m.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)?.let { m.name to it } }
+        assertEquals(16, items.size, items.map { it.first }.toString())
+        val modifiers =
+            items.associate { (name, item) ->
+                assertNotNull(item.options.objectInstance, "$name: ${item.options} is no Kotlin object in the jar")
+                name to (item.stateModifier.objectInstance ?: error("$name: ${item.stateModifier} is no Kotlin object in the jar"))
+            }
+
+        val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" } as Enum<*>
+        fun config(vararg values: Pair<String, com.cereal.sdk.statemodifier.ScriptConfigValue>) =
+            object : com.cereal.sdk.statemodifier.ScriptConfig {
+                override fun valueForKey(key: String) =
+                    values.toMap()[key] ?: com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
+            }
+        val customProvider = "provider" to com.cereal.sdk.statemodifier.ScriptConfigValue.EnumScriptConfigValue(custom)
+        assertEquals("Model is required for Custom", modifiers.getValue("model").getError(config(customProvider)))
+        assertEquals("claude-sonnet-5-5", modifiers.getValue("model").getPlaceholder(config()))
+        assertEquals("http://localhost:11434/v1", modifiers.getValue("baseUrl").getPlaceholder(config(customProvider)))
+        val ftp = "startUrl" to com.cereal.sdk.statemodifier.ScriptConfigValue.StringScriptConfigValue("ftp://example.com")
+        assertEquals("Start URL must be an http(s) URL", modifiers.getValue("startUrl").getError(config(ftp)))
+        assertEquals("Goal is required", modifiers.getValue("goal").getError(config()))
     }
 
     @Test

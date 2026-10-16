@@ -20,7 +20,7 @@ internal enum class Kind(val color: String, val emoji: String, val ping: Boolean
 }
 
 /**
- * The result message (see CONTEXT.md): headline, action line, summary (or `old → new`), Readouts, notes, cost line,
+ * The result message (see CONTEXT.md): headline, action line, summary (or `old → new`), Readouts, cost line,
  * page link. Desktop and email get it as plain lines; Discord as an embed; Telegram as HTML.
  */
 internal data class ResultMessage(
@@ -29,11 +29,10 @@ internal data class ResultMessage(
     val action: String? = null,
     val summary: String? = null,
     val readouts: List<Pair<String, String>> = emptyList(),
-    val notes: List<String> = emptyList(),
     val cost: String? = null,
     val url: String? = null,
 ) {
-    val plain get() = (listOfNotNull(headline, action, summary) + readouts.map { (l, t) -> "$l: $t" } + notes + listOfNotNull(cost)).joinToString("\n")
+    val plain get() = (listOfNotNull(headline, action, summary) + readouts.map { (l, t) -> "$l: $t" } + listOfNotNull(cost)).joinToString("\n")
 
     // A confirmation's plain action line points at the dialog; the chat apps can only say where it is.
     private val richAction get() = if (kind == Kind.Confirmation) "Answer in the Cereal window." else action
@@ -51,7 +50,7 @@ internal data class ResultMessage(
         fun embed(summaryMax: Int, valueMax: Int) =
             DiscordEmbed(
                 title = headline.cut(256),
-                description = (listOfNotNull(richAction, summary?.cut(summaryMax)) + notes).joinToString("\n").cut(4096).ifEmpty { null },
+                description = listOfNotNull(richAction, summary?.cut(summaryMax)).joinToString("\n").cut(4096).ifEmpty { null },
                 url = url,
                 color = kind.color,
                 footer = FooterEmbed(text = footer),
@@ -68,7 +67,6 @@ internal data class ResultMessage(
                 listOfNotNull("${kind.emoji} <b>${esc(headline.cut(256))}</b>", richAction?.let { esc(it.cut(512)) }) +
                     readouts.map { (l, t) -> "${esc(l)}: <b>${esc(t.cut(valueMax))}</b>" } +
                     listOfNotNull(summary?.let { "<i>${esc(it.cut(summaryMax))}</i>" }) +
-                    notes.map { esc(it.cut(512)) } +
                     listOfNotNull(
                         listOfNotNull(url?.let { "<a href=\"${esc(it).replace("\"", "&quot;")}\">Open page</a>" }, cost?.let(::esc)).joinToString(" · ").ifEmpty { null },
                         esc(goal.cut(100)),
@@ -80,7 +78,7 @@ internal data class ResultMessage(
 
     /**
      * Renders with the summary cut first, then the Readout values, until [size] is within [max]. ponytail: the
-     * Readout labels are never cut (headline, action, notes and goal have fixed caps), so many very long labels could still overflow; nothing makes those today.
+     * Readout labels are never cut (headline, action and goal have fixed caps), so many very long labels could still overflow; nothing makes those today.
      */
     private fun <T> fit(max: Int, render: (Int, Int) -> T, size: (T) -> Int): T {
         var summaryMax = summary?.length ?: 0

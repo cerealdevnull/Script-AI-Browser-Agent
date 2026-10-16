@@ -133,7 +133,7 @@ class FailureTest {
 
         assertEquals(
             "The agent got stuck repeating the same action on ${site.url("login.html")}.\n" +
-                "Pick “Forget learned steps and sign out” in On next start, then start the task again.\nCost: \$0.04",
+                "Pick Forget learned steps and sign out in the task's menu, then start the task again.\nCost: \$0.04",
             host.notifications.single().message,
         )
     }

@@ -25,19 +25,19 @@ class ConfigValidationTest {
     fun `missing API key`() = assertRejected(TestConfig(apiKey = null), "API key is required for Anthropic")
 
     @Test
-    fun `secret labels must be unique, ignoring case and spaces around them`() =
+    fun `secret labels must be unique, ignoring case and spaces`() =
         assertRejected(
-            TestConfig(secrets = listOf("Email" to Secret("a"), " email " to Secret("b"))),
-            "The label 'email' is already used by another secret",
+            TestConfig(secrets = listOf("My Password" to Secret("a"), " my  password " to Secret("b"))),
+            "Secret 2's label 'my  password' is already used by secret 1",
         )
 
     @Test
     fun `a secret value needs a label`() =
-        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Give this value a label, e.g. password")
+        assertRejected(TestConfig(secrets = listOf("email" to Secret("a"), null to Secret("b"))), "Secret 2 needs a label, e.g. password")
 
     @Test
     fun `a secret label needs a value`() =
-        assertRejected(TestConfig(secrets = listOf("Email" to null)), "Enter the value for 'Email'")
+        assertRejected(TestConfig(secrets = listOf("Email" to null)), "Secret 1 ('Email') needs a value")
 
     @Test
     fun `step cap must be positive`() = assertRejected(TestConfig(maxSteps = 0), "Max steps per run must be > 0")
@@ -53,10 +53,6 @@ class ConfigValidationTest {
 
     @Test
     fun `a Once task ignores the hidden Check every`() = assertRejected(TestConfig(apiKey = null, repeatInterval = 0), "API key is required for Anthropic")
-
-    @Test
-    fun `a hidden secret slot is not validated`() =
-        assertRejected(TestConfig(apiKey = null, secrets = listOf(null to null, null to Secret("b"))), "API key is required for Anthropic")
 
     @Test
     fun `an old saved task lists every problem in one notification`() =

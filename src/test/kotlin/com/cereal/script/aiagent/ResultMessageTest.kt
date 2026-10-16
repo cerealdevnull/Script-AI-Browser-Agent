@@ -151,8 +151,8 @@ class ResultMessageTest {
     }
 
     @Test
-    fun `a 4,000-character goal, a long headline, action and notes still fit Telegram, keeping the cost line`() {
-        val m = onceMet.copy(headline = "h".repeat(3000), action = "a".repeat(3000), notes = listOf("n".repeat(3000)))
+    fun `a 4,000-character goal, a long headline and action still fit Telegram, keeping the cost line`() {
+        val m = onceMet.copy(headline = "h".repeat(3000), action = "a".repeat(3000))
         val text = m.notification("g".repeat(4000)).telegramMessage!!.text
         assertTrue(text.length <= 4096, "Telegram text is ${text.length} characters")
         assertTrue("Cost: $0.01" in text && text.startsWith("✅ <b>hhh"), text)

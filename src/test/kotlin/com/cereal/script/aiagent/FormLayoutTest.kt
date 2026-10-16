@@ -11,7 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** S6: a Once task shows no interval and one secret pair; Repeat shows Check every; a label reveals the next pair. */
+/** S6: a Once task shows no interval and a secrets list; Repeat shows Check every. */
 class FormLayoutTest {
     @Test
     fun `Check every shows only for Repeat`() {
@@ -21,47 +21,87 @@ class FormLayoutTest {
     }
 
     @Test
-    fun `Secret 2 appears once Secret 1 has a label, Secret 3 once Secret 2 has one`() {
-        val empty = form()
-        assertEquals(Visibility.Hidden, Secret2LabelState.getVisibility(empty))
-        assertEquals(Visibility.Hidden, Secret2LabelState.getVisibility(form("secret1Name" to ScriptConfigValue.StringScriptConfigValue(" "))))
-        val oneLabel = form("secret1Name" to ScriptConfigValue.StringScriptConfigValue("email"))
-        assertEquals(Visibility.VisibleOptional, Secret2LabelState.getVisibility(oneLabel))
-        assertEquals(Visibility.Hidden, Secret3LabelState.getVisibility(oneLabel))
-        assertEquals(Visibility.VisibleOptional, Secret3LabelState.getVisibility(form("secret2Name" to ScriptConfigValue.StringScriptConfigValue("password"))))
+    fun `the secrets list names the row to fix at Save`() {
+        fun row(label: String?, value: String?) =
+            object : ScriptConfig {
+                override fun valueForKey(key: String): ScriptConfigValue =
+                    when (key) {
+                        "label" -> label?.let { ScriptConfigValue.StringScriptConfigValue(it) }
+                        "value" -> value?.let { ScriptConfigValue.SecretScriptConfigValue(Secret(it)) }
+                        else -> null
+                    } ?: ScriptConfigValue.NullScriptConfigValue
+            }
+        fun secrets(vararg rows: ScriptConfig) = form("secrets" to ScriptConfigValue.ListScriptConfigValue(rows.toList()))
+
+        assertEquals(null, SecretsState.getError(form()))
+        assertEquals(null, SecretsState.getError(secrets(row("Email", "a"), row("Password", "b"))))
+        assertEquals("Secret 2 ('Email') needs a value", SecretsState.getError(secrets(row("Password", "b"), row(" Email ", ""))))
+        assertEquals("Secret 1 needs a label, e.g. password", SecretsState.getError(secrets(row(" ", "x"))))
+        assertEquals(
+            "Secret 3's label 'my  password' is already used by secret 1",
+            SecretsState.getError(secrets(row("My Password", "a"), row("Email", "b"), row("my  password", "c"))),
+        )
+        assertEquals(
+            "Secret 1 needs a label, e.g. password. Secret 1 needs a value",
+            SecretsState.getError(secrets(row(null, null))),
+        )
     }
 
     @Test
-    fun `secret errors show at Save under the field to fix`() {
-        fun label(text: String) = ScriptConfigValue.StringScriptConfigValue(text)
-        fun value(text: String) = ScriptConfigValue.SecretScriptConfigValue(Secret(text))
-
-        val noValue = form("secret1Name" to label(" Email "))
-        assertEquals("Enter the value for 'Email'", Secret1ValueState.getError(noValue))
-        assertEquals(null, Secret1LabelState.getError(noValue))
-
-        assertEquals("Give this value a label, e.g. password", Secret1LabelState.getError(form("secret1Value" to value("x"))))
-
-        val twice = form("secret1Name" to label("Email"), "secret1Value" to value("a"), "secret2Name" to label("email"), "secret2Value" to value("b"))
-        assertEquals(null, Secret1LabelState.getError(twice))
-        assertEquals("The label 'email' is already used by another secret", Secret2LabelState.getError(twice))
-        assertEquals(null, Secret2ValueState.getError(twice))
+    fun `the secrets list explains how labels are used`() {
+        val description = item("secrets").description
+        listOf("same words in your goal", "never sees the value").forEach { assertTrue(it in description, description) }
     }
 
     @Test
-    fun `fields follow the S6 order`() {
-        val order =
+    fun `fields are grouped into Task, AI provider, Sign-in secrets and a collapsed Advanced section`() {
+        val sections =
+            AgentConfiguration::class.java.getAnnotation(com.cereal.sdk.ScriptConfigurationSections::class.java)!!.value
+                .map { Triple(it.key, it.name, it.collapsed) }
+        assertEquals(
+            listOf(
+                Triple("task", "Task", false),
+                Triple("provider", "AI provider", false),
+                Triple("secrets", "Sign-in secrets", false),
+                Triple("advanced", "Advanced", true),
+            ),
+            sections,
+        )
+        val bySection =
             AgentConfiguration::class.java.methods
                 .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
                 .sortedBy { it.position }
-                .map { it.keyName }
+                .groupBy({ it.section }, { it.keyName })
+        assertEquals(listOf("goal", "startUrl", "runMode", "repeatInterval"), bySection["task"])
+        assertEquals(listOf("provider", "apiKey", "model", "baseUrl"), bySection["provider"])
+        assertEquals(listOf("secrets"), bySection["secrets"])
+        assertEquals(listOf("allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost"), bySection["advanced"])
+        assertEquals(null, bySection[""], "unsectioned fields render first")
+    }
+
+    @Test
+    fun `Start URL and Server URL show their examples as placeholders, not in the description`() {
+        assertEquals("https://example.com", StartUrlState.getPlaceholder(form()))
+        assertEquals("http://localhost:11434/v1", ServerUrlState.getPlaceholder(form("provider" to ScriptConfigValue.EnumScriptConfigValue(Provider.Custom))))
+        val items =
+            AgentConfiguration::class.java.methods
+                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
+                .associateBy { it.keyName }
+        assertEquals("The page the agent starts on.", items.getValue("startUrl").description)
+        val server = items.getValue("baseUrl").description
+        assertTrue("e.g." !in server && "11434" !in server && "LM Studio's is http://localhost:1234/v1" in server, server)
+    }
+
+    @Test
+    fun `the API key description is one line of provider links`() {
+        val items =
+            AgentConfiguration::class.java.methods
+                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
+                .associateBy { it.keyName }
         assertEquals(
-            listOf(
-                "goal", "startUrl", "runMode", "repeatInterval", "provider", "apiKey", "model", "baseUrl",
-                "secret1Name", "secret1Value", "secret2Name", "secret2Value", "secret3Name", "secret3Value",
-                "allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost", "onNextStart",
-            ),
-            order,
+            "Get a key: [Anthropic](https://console.anthropic.com/settings/keys) · [Gemini](https://aistudio.google.com/apikey) · " +
+                "[OpenAI](https://platform.openai.com/api-keys) · [OpenRouter](https://openrouter.ai/settings/keys). Optional for Custom.",
+            items.getValue("apiKey").description,
         )
     }
 
@@ -74,12 +114,7 @@ class FormLayoutTest {
                 override fun apiKey() = null
                 override fun model() = null
                 override fun baseUrl() = null
-                override fun secret1Name() = null
-                override fun secret1Value() = null
-                override fun secret2Name() = null
-                override fun secret2Value() = null
-                override fun secret3Name() = null
-                override fun secret3Value() = null
+                override fun secrets() = null
                 override fun allowedDomains() = null
             }
         assertEquals(Triple(40, 2.0, 5.0), Triple(fresh.maxSteps(), fresh.maxRunCost(), fresh.maxTaskCost()))
@@ -133,6 +168,11 @@ class FormLayoutTest {
         Provider.entries.mapNotNull { it.keyUrl }.forEach { assertTrue(it in requirements, it) }
         assertTrue(Regex("\\bChecks?\\b").find(text) == null, "check is lower-case")
     }
+
+    private fun item(keyName: String) =
+        AgentConfiguration::class.java.methods
+            .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
+            .single { it.keyName == keyName }
 
     private fun form(vararg values: Pair<String, ScriptConfigValue>) =
         object : ScriptConfig {

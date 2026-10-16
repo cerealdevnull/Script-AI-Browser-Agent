@@ -93,7 +93,7 @@ SMOKE_FILE=field-tests/toolshop-invoice.json ./gradlew acceptanceTest --tests '*
 ```
 
 A field-test file (`field-tests/<id>.json`, fields in `FieldTest` in `SmokeTest.kt`) holds the goal, start URL, run
-mode, the expected result, and for a goal that signs in, each secret slot's label mapped to the environment variable
+mode, the expected result, and for a goal that signs in, each sign-in secret's label mapped to the environment variable
 holding its value. `./gradlew test` checks that every file parses. The `/field-test` skill (`.claude/skills/field-test/`)
 runs a file and judges the run against its expected result.
 

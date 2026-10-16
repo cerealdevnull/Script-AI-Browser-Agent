@@ -30,6 +30,7 @@
 - **handoff**: the agent pauses so the user can clear a CAPTCHA, bot wall or verification code in its Chrome, then resumes; unlike a confirmation, the user acts in the browser, not in a dialog.
 - **consent reject**: the script declining a cookie consent banner itself, before the model sees the page; it is never a step.
 - **consent banner**: a cookie-consent dialog or wall. The script rejects known ones itself, which costs no step and records nothing; the model rejects the rest.
+- **sign-in secret**: a row of the Sign-in secrets list: a label (the name `type_secret` uses, lowercase with `_` for spaces) and a masked value.
 - **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **browser profile**: the task's own Chrome data (cookies, sign-ins); tied to the task and its secret values, so another account gets a clean one.

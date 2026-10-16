@@ -67,6 +67,21 @@
     <init>(...);
     *;
 }
+# The restored *State.class objects (build.gradle.kts) call these by their original names.
+-keep class com.cereal.script.aiagent.AgentConfigurationKt {
+    *** access$number(...);
+    *** access$provider(...);
+    *** access$secretSlots(...);
+    *** access$string(...);
+    *** access$visibleRequiredIf(...);
+    *** apiKeyError(...);
+    *** goalError(...);
+    *** modelError(...);
+    *** positiveError(...);
+    *** secretSlotErrors(...);
+    *** serverUrlError(...);
+    *** startUrlError(...);
+}
 
 # Keep the enum class so that annotations are preserved.
 -keep enum * {}

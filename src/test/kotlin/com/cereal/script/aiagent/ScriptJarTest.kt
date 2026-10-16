@@ -2,7 +2,11 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.Script
 import com.cereal.sdk.ScriptConfiguration
+import com.cereal.sdk.ScriptConfigurationItem
 import com.cereal.sdk.models.Secret
+import com.cereal.sdk.statemodifier.ScriptConfig
+import com.cereal.sdk.statemodifier.ScriptConfigValue
+import com.cereal.sdk.statemodifier.Visibility
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -102,6 +106,39 @@ class ScriptJarTest {
                 assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
             }
         }
+    }
+
+    @Test
+    fun `the host can instantiate every form field's state modifier from the shrunk jar`() {
+        val manifest = ZipFile(jar).use { zip -> zip.getInputStream(zip.getEntry("manifest.json")).reader().readText() }
+        val loader = HostLikeScriptClassLoader(jar.toURI().toURL(), javaClass.classLoader)
+        val scriptClass = loader.loadClass(Json.parseToJsonElement(manifest).jsonObject["script"]!!.jsonPrimitive.content)
+        val configClass = scriptClass.genericInterfaces.filterIsInstance<ParameterizedType>()
+            .first { it.rawType == Script::class.java }.actualTypeArguments.single() as Class<*>
+
+        // Like the host's ScriptConfigurationDefinitionBuilder: a null objectInstance fails the whole form.
+        val items =
+            (listOf(configClass) + configClass.declaredClasses).flatMap { it.methods.toList() }
+                .mapNotNull { m -> m.getAnnotation(ScriptConfigurationItem::class.java)?.let { m.name to it } }
+        assertEquals(20, items.size, items.map { it.first }.toString())
+        val modifiers =
+            items.associate { (name, item) ->
+                name to (item.stateModifier.objectInstance ?: error("$name: ${item.stateModifier} is no Kotlin object in the jar"))
+            }
+
+        // The restored objects call into the shrunk code by its original names.
+        val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" } as Enum<*>
+        fun config(vararg values: Pair<String, ScriptConfigValue>) =
+            object : ScriptConfig {
+                override fun valueForKey(key: String) = values.toMap()[key] ?: ScriptConfigValue.NullScriptConfigValue
+            }
+        val customProvider = "provider" to ScriptConfigValue.EnumScriptConfigValue(custom)
+        assertEquals("Model is required for Custom", modifiers.getValue("model").getError(config(customProvider)))
+        assertEquals(Visibility.VisibleRequired, modifiers.getValue("baseUrl").getVisibility(config(customProvider)))
+        val ftp = "startUrl" to ScriptConfigValue.StringScriptConfigValue("ftp://example.com")
+        assertEquals("Start URL must be an http(s) URL", modifiers.getValue("startUrl").getError(config(ftp)))
+        assertEquals("Goal is required", modifiers.getValue("goal").getError(config()))
+        assertEquals(Visibility.Hidden, modifiers.getValue("secret2Name").getVisibility(config()))
     }
 
     @Test

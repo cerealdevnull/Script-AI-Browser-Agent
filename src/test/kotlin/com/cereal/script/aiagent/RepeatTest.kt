@@ -103,7 +103,7 @@ class RepeatTest {
             )
 
         task(model, config(repeatInterval = 900, maxTaskCost = 5.0), clock) { execute ->
-            assertEquals("Not yet · checked 14:32 · next 14:47 · unknown (no price for llama3) of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
+            assertEquals("Not yet · checked 14:32 · next 14:47 · unknown of \$5 total", assertIs<ExecutionResult.Loop>(execute()).message)
         }
     }
 

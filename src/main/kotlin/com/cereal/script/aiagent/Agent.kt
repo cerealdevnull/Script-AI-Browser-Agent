@@ -140,6 +140,7 @@ class Agent(
     private val irreversible = Irreversible(browser, allowedDomains)
     private val turns = mutableListOf<LlmTurn>()
     private val unpriced = mutableSetOf<String>()
+    private var rejectedTurns = 0
     var steps = 0
         private set
 
@@ -147,8 +148,8 @@ class Agent(
     var cost = 0.0
         private set
 
-    /** Models that answered a step with no known price; [cost] counts only the priced steps. */
-    val unpricedModels: Set<String> get() = unpriced
+    /** Some step had no known price (an unpriced model or a rejected turn); [cost] counts only the priced steps. */
+    val costUnknown: Boolean get() = unpriced.isNotEmpty() || rejectedTurns > 0
     private var finishRejections = 0
     private var earlierFalse: String? = null // the summary of a rejected finish that said goal_met false
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
@@ -198,28 +199,31 @@ class Agent(
             val response =
                 try {
                     llm.complete(LlmRequest(SYSTEM_PROMPT, turns.toList(), LLM_TOOLS))
-                } catch (e: LlmException.InvalidOutput) {
-                    rejected = e
-                    null
                 } catch (e: LlmException) {
-                    warn("step ${steps + 1}: the model call failed: ${e::class.simpleName}: ${e.message}")
+                    val provider = AI_PROVIDER.replaceFirstChar(Char::titlecase)
                     // The client's message is the headline, except a rejected request, whose message is the provider's own text.
-                    return when (e) {
-                        is LlmException.RateLimited, is LlmException.Unavailable ->
-                            Outcome.Failed(e.message ?: "Couldn't reach $AI_PROVIDER.", steps, unreachable = AI_PROVIDER)
-                        // InvalidOutput is caught above; it is listed only so the when stays exhaustive.
-                        is LlmException.InvalidRequest, is LlmException.InvalidOutput ->
-                            Outcome.Failed("The AI provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
-                        is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "The AI provider rejected the request.", steps)
+                    val failed =
+                        when (e) {
+                            is LlmException.InvalidOutput -> null.also { rejected = e }
+                            is LlmException.RateLimited, is LlmException.Unavailable ->
+                                Outcome.Failed(e.message ?: "Couldn't reach $AI_PROVIDER.", steps, unreachable = AI_PROVIDER)
+                            is LlmException.InvalidRequest ->
+                                Outcome.Failed("$provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
+                            is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "$provider rejected the request.", steps)
+                        }
+                    if (failed != null) {
+                        warn("step ${steps + 1}: the model call failed: ${e::class.simpleName}: ${e.message}")
+                        return failed
                     }
+                    null
                 }
             steps++
             val turn = response?.assistantTurn ?: rejected!!.assistantTurn
             turns += turn
-            val u = response?.usage?.let { Usage(it.inputUncached.toLong(), it.output.toLong(), it.cacheRead.toLong(), it.cacheWrite.toLong()) }
+            val u = response?.usage?.toUsage()
             val stepCost =
                 if (response == null) {
-                    unpriced += REJECTED_TURN
+                    rejectedTurns++
                     warn("step $steps: the client rejected the model's tool arguments (${rejected!!.message}): counted as \$0, checking each call")
                     0.0
                 } else {
@@ -344,7 +348,7 @@ class Agent(
     /** `$0.12`; `$?` when no step had a price; `$0.12 + unknown` when only some did. */
     private fun spent() =
         when {
-            unpriced.isEmpty() -> usd(cost)
+            !costUnknown -> usd(cost)
             cost == 0.0 -> "\$?"
             else -> "${usd(cost)} + unknown"
         }
@@ -880,9 +884,6 @@ class Agent(
                 ),
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),
             )
-
-        /** Stands in for a model name in [unpricedModels]: a rejected turn has no usage, so its cost is unknown. */
-        const val REJECTED_TURN = "a rejected turn"
 
         private val LLM_TOOLS = TOOLS.map { LlmTool(it.name, it.description, it.schema.toString()) }
 

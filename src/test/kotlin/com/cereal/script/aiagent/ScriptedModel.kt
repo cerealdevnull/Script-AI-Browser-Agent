@@ -16,7 +16,7 @@ import com.cereal.test.components.invalidOutput
  */
 class ScriptedModel(
     vararg turns: suspend (LlmRequest) -> List<LlmToolCall>,
-    private val usage: LlmUsage = LlmUsage(1000, 0, 0, 100),
+    private val usage: LlmUsage = DEFAULT_USAGE,
     /** The responding model per turn; [MODEL] once the list runs out. */
     private val models: List<String> = emptyList(),
 ) {
@@ -38,6 +38,9 @@ class ScriptedModel(
     }
 }
 
+/** The default usage of a scripted turn: 1000 uncached input and 100 output tokens. */
+private val DEFAULT_USAGE = LlmUsage(1000, 0, 0, 100)
+
 /** An [LlmResponse] with its own usage and model: cereal-test-utils' `llmResponse()` has zero usage and model `fake`. */
 @OptIn(CerealPlatformApi::class)
 fun response(
@@ -45,7 +48,7 @@ fun response(
     text: String = "",
     stopReason: StopReason = if (calls.isEmpty()) StopReason.EndTurn else StopReason.ToolUse,
     model: String = ScriptedModel.MODEL,
-    usage: LlmUsage = LlmUsage(1000, 0, 0, 100),
+    usage: LlmUsage = DEFAULT_USAGE,
 ) = LlmResponse(text, calls, null, stopReason, usage, model, null)
 
 private var callIds = 0

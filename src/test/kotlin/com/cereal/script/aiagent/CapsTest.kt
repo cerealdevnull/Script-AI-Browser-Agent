@@ -102,7 +102,7 @@ class CapsTest {
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Stopped after 2 steps, the Max steps per run limit.", result.message)
-        assertTrue(host.notifications.single().message.endsWith("\nCost: unknown (no price for llama3.3:70b)"))
+        assertTrue(host.notifications.single().message.endsWith("\nCost: unknown"))
         assertEquals(1, host.logs.count { it == "WARN no price known for model llama3.3:70b: counted as \$0, only the step cap applies" })
     }
 
@@ -139,7 +139,7 @@ class CapsTest {
         run(model)
 
         assertEquals("Step 2 of 40 · \$? · Thinking…", host.statuses.first { it.startsWith("Step 2") })
-        assertEquals("In stock.\nCost: unknown (no price for llama3.3:70b)", host.notifications.single().message)
+        assertEquals("In stock.\nCost: unknown", host.notifications.single().message)
     }
 
     @Test

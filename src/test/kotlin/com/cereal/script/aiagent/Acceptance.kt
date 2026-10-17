@@ -48,10 +48,7 @@ class RunStats(val goal: String, val run: String, responses: List<LlmResponse>, 
     val steps = responses.size
     val models = responses.map { it.model }.distinct()
     val cost =
-        responses.sumOf { r ->
-            val u = r.usage
-            Prices.cost(r.model, Usage(u.inputUncached.toLong(), u.output.toLong(), u.cacheRead.toLong(), u.cacheWrite.toLong())) ?: 0.0
-        }
+        responses.sumOf { Prices.cost(it.model, it.usage.toUsage()) ?: 0.0 }
 
     fun row() = "| $goal | $run | $steps | ${usd(cost, 4)} | ${models.joinToString().ifEmpty { "-" }} | $dialogs | ${result::class.simpleName}: ${result.message} |"
 

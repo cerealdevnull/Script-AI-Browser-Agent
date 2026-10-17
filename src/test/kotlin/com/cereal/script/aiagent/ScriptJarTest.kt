@@ -95,7 +95,7 @@ class ScriptJarTest {
                 assertEquals(2, host.llm.requests.size) // learning: click, then finish; the replay calls no model
                 val (watching, met) = host.notifications.map { it.message }
                 assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
-                assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
+                assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown over 2 checks since "), met)
 
                 // The task menu's resets: the host calls the jar's TaskAction objects through the SDK interface.
                 val cacheKey = ReplayCache.key(values.getValue("goal") as String, site.url(), emptyList())

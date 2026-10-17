@@ -44,8 +44,8 @@ internal class AgentScript(
     private var startedOn = LocalDate.now(clock)
     private var healing = false
 
-    // Models without a known price used this task start (the task total is then partly unknown).
-    private var taskUnpriced = setOf<String>()
+    // Some step this task start had no known price (the task total is then partly unknown).
+    private var taskCostUnknown = false
 
     // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
     private var scrubber: Scrubber? = null
@@ -89,7 +89,7 @@ internal class AgentScript(
         checks = 0
         startedOn = LocalDate.now(clock)
         healing = false
-        taskUnpriced = emptySet()
+        taskCostUnknown = false
         scrubber = null
         transientFailures = 0
         capWarned = false
@@ -150,7 +150,7 @@ internal class AgentScript(
         // A replay that ends not met where the learned run met it: the learned steps likely no longer fit.
         var learnedMet = false
         val cost = {
-            "Cost: ${spent(agent.cost, agent.unpricedModels)}" +
+            "Cost: ${spent(agent.cost, agent.costUnknown)}" +
                 when {
                     repeat -> ""
                     agent.healed -> " (the page changed, so it re-learned part of it)"
@@ -173,12 +173,12 @@ internal class AgentScript(
                 throw e
             } catch (e: Exception) {
                 // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
-                // Logged as scrubbed text, not as a Throwable: its message could carry a secret or the API key.
+                // Logged as scrubbed text, not as a Throwable: its message could carry a secret.
                 log.error(scrubber.forLog("goal run failed: ${e.stackTraceToString()}"))
                 return report.error("Something went wrong inside the script.", "Start the task again. If it happens again, send the task log to the developer.", cost())
             } finally {
                 taskSpent += agent.cost
-                taskUnpriced += agent.unpricedModels
+                taskCostUnknown = taskCostUnknown || agent.costUnknown
                 checks++
             }
         // Repeat: "Goal met" only ever comes from a verified Check; an unverified one is not met and loops quietly.
@@ -214,7 +214,7 @@ internal class AgentScript(
         // Between checks the task row tells when it checked and when it checks next; the times keep each line unique.
         val notYet =
             if (repeat && outcome is Outcome.Finished && !outcome.goalMet) {
-                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${spent(taskSpent, taskUnpriced).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
+                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${spent(taskSpent, taskCostUnknown).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
             } else {
                 null
             }
@@ -243,7 +243,7 @@ internal class AgentScript(
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
             return retry(configuration, scrubber.forLog((outcome as Outcome.Failed).unreachable!!), statusUpdate)
         }
-        val total = { "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
+        val total = { "Cost: ${spent(taskSpent, taskCostUnknown)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
         return when (outcome) {
             is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
                 report.error(
@@ -267,7 +267,7 @@ internal class AgentScript(
                             cost = cost(),
                             status = false,
                         )
-                    !healing -> report.notify(Kind.Watching, "The page changed, so I re-learned it for ${spent(agent.cost, agent.unpricedModels)}. Still watching.", status = false)
+                    !healing -> report.notify(Kind.Watching, "The page changed, so I re-learned it for ${spent(agent.cost, agent.costUnknown)}. Still watching.", status = false)
                 }
                 healing = agent.healed
                 ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
@@ -473,11 +473,11 @@ private const val COST_ZERO = "Cost: \$0"
 /** One side of a change's `old → new`: at most 100 characters. */
 private fun cut(s: String) = if (s.length > 100) s.take(99) + "…" else s
 
-/** A cost amount: `$0.21`, `$0`, `unknown (no price for x)` or `$0.12 + unknown`. */
-private fun spent(amount: Double, unpriced: Set<String>) =
+/** A cost amount: `$0.21`, `$0`, `unknown` or `$0.12 + unknown`; never a model id. */
+private fun spent(amount: Double, unknown: Boolean) =
     when {
-        unpriced.isEmpty() -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
-        amount == 0.0 -> "unknown (no price for ${unpriced.joinToString()})"
+        !unknown -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
+        amount == 0.0 -> "unknown"
         else -> "${usd(amount)} + unknown"
     }
 

@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
@@ -35,11 +37,11 @@ class HealTest {
         TestConfig(goal = GOAL, startUrl = site.url(""), runMode = runMode, repeatInterval = 7, maxSteps = maxSteps)
 
     private fun task(
-        model: ModelClient,
+        model: ScriptedModel,
         config: TestConfig = config(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AgentScript({ model }, profiles)
+        val script = AgentScript(profiles).also { host.llm.responder = model::respond }
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
@@ -59,15 +61,15 @@ class HealTest {
             Json.parseToJsonElement(host.create().preference().getString(key)!!).jsonObject.getValue("steps").jsonArray
         }
 
-    private fun click(name: String): suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("link", name)}}""")) }
+    private fun click(name: String): suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("link", name)}}""")) }
 
-    private val notMet: suspend (ModelRequest) -> List<ToolCall> = {
+    private val notMet: suspend (LlmRequest) -> List<LlmToolCall> = {
         val check = """{"ref": "${it.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}"""
         listOf(call("finish", """{"goal_met": false, "summary": "Out of stock.", "readouts": null, "check": $check}"""))
     }
 
     /** Learns Tools -> Long Nose Pliers -> a Check on the stock text (3 model requests). */
-    private fun learning(vararg healTurns: suspend (ModelRequest) -> List<ToolCall>) =
+    private fun learning(vararg healTurns: suspend (LlmRequest) -> List<LlmToolCall>) =
         ScriptedModel(click("Tools"), click("Long Nose Pliers"), notMet, *healTurns)
 
     @Test
@@ -179,7 +181,7 @@ class HealTest {
 
     @Test
     fun `a missing Readout element is a miss, the healed value is reported and never a blank`() {
-        val price: suspend (ModelRequest) -> List<ToolCall> = {
+        val price: suspend (LlmRequest) -> List<LlmToolCall> = {
             val text = Regex("""\[t\d+] StaticText "(Price: [^"]+)"""").find(it.lastText)!!.groupValues[1]
             val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", text)}", "value": "$text"}"""
             listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": [$readout], "check": null}"""))
@@ -196,12 +198,12 @@ class HealTest {
 
     @Test
     fun `a replay that stops matching after a redesign and ends not met, where the learned run met it, points at Forget learned steps`() {
-        val price: suspend (ModelRequest) -> List<ToolCall> = {
+        val price: suspend (LlmRequest) -> List<LlmToolCall> = {
             val text = Regex("""\[t\d+] StaticText "(Price: [^"]+)"""").find(it.lastText)!!.groupValues[1]
             val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", text)}", "value": "$text"}"""
             listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": [$readout], "check": null}"""))
         }
-        val notFound: suspend (ModelRequest) -> List<ToolCall> = {
+        val notFound: suspend (LlmRequest) -> List<LlmToolCall> = {
             listOf(call("finish", """{"goal_met": false, "summary": "Couldn't find the pliers.", "readouts": null, "check": null}"""))
         }
         val model = ScriptedModel(click("Tools"), click("Long Nose Pliers"), price, notFound)
@@ -250,7 +252,7 @@ class HealTest {
     @Test
     fun `another kind of element where the learned target was is a miss, not a guess`() {
         site.pages["index.html"] = """<html><body><form><input aria-label="Email address"></form><p>Status:</p><p>Out</p></body></html>"""
-        val out: suspend (ModelRequest) -> List<ToolCall> = {
+        val out: suspend (LlmRequest) -> List<LlmToolCall> = {
             val check = """{"ref": "${it.textRef("StaticText", "Out")}", "condition": "textContains", "expected": "In"}"""
             listOf(call("finish", """{"goal_met": false, "summary": "Out.", "readouts": null, "check": $check}"""))
         }
@@ -277,7 +279,7 @@ class HealTest {
 
     @Test
     fun `a heal that finds the goal met keeps the learned Check, so the next run still replays`() {
-        val met: suspend (ModelRequest) -> List<ToolCall> = {
+        val met: suspend (LlmRequest) -> List<LlmToolCall> = {
             val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "textContains", "expected": "In stock"}"""
             listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": null, "check": $check}"""))
         }
@@ -297,7 +299,7 @@ class HealTest {
 
     @Test
     fun `a heal after the Check's target is gone does not cache that Check again`() {
-        val price: suspend (ModelRequest) -> List<ToolCall> = {
+        val price: suspend (LlmRequest) -> List<LlmToolCall> = {
             val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", "Price: \$15.00")}", "value": "Price: ${'$'}15.00"}"""
             listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": [$readout], "check": null}"""))
         }

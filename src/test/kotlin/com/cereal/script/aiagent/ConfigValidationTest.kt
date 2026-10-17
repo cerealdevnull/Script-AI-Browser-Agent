@@ -60,7 +60,7 @@ class ConfigValidationTest {
             val host = Host()
             val model = ScriptedModel()
 
-            val result = host.run(AgentScript({ model }, tempProfiles()), TestConfig(apiKey = null, runMode = RunMode.Repeat, repeatInterval = 0))
+            val result = host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(apiKey = null, runMode = RunMode.Repeat, repeatInterval = 0))
 
             val expected = "Fix these in the task settings: API key is required for Anthropic. Check every must be > 0."
             assertIs<ExecutionResult.Error>(result)
@@ -81,7 +81,7 @@ class ConfigValidationTest {
                     override fun startUrl(): String = throw RuntimeException("No value found for configuration method 'startUrl'")
                 }
 
-            val result = Host().run(AgentScript({ ScriptedModel() }, tempProfiles()), unset)
+            val result = Host().run(AgentScript(tempProfiles()), unset)
 
             assertIs<ExecutionResult.Error>(result)
             assertEquals("Fix these in the task settings: Goal is required. Start URL is required.", result.message)
@@ -94,7 +94,7 @@ class ConfigValidationTest {
             val host = Host()
             val model = ScriptedModel()
 
-            val result = host.run(AgentScript({ model }, tempProfiles()), config)
+            val result = host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, config)
 
             assertIs<ExecutionResult.Error>(result)
             assertEquals(reason, result.message)

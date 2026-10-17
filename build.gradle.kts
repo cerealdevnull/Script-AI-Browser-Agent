@@ -104,7 +104,7 @@ tasks.processResources {
 dependencies {
     implementation(libs.cereal.sdk)
     implementation(libs.kdriver.core)
-    implementation(libs.okhttp)
+    testImplementation(libs.okhttp) // the acceptance runs' test-only LlmComponent and Toolshop API
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(kotlin("test"))

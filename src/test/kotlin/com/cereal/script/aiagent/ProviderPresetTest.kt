@@ -11,42 +11,6 @@ import kotlin.test.assertIs
 
 class ProviderPresetTest {
     @Test
-    fun `a fresh task on Anthropic with an empty Model runs on Claude Sonnet 5_5 at Anthropic, ignoring a leftover Server URL`() {
-        val client = assertIs<AnthropicClient>(modelClient(TestConfig(model = null, baseUrl = "http://localhost:11434/v1")))
-        assertEquals("https://api.anthropic.com", client.baseUrl)
-        assertEquals("claude-sonnet-5-5", client.model)
-    }
-
-    @Test
-    fun `Gemini and OpenAI presets use their own server and recommended model`() {
-        val gemini = assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.Gemini, model = " ", baseUrl = "http://x")))
-        assertEquals("https://generativelanguage.googleapis.com/v1beta/openai", gemini.baseUrl)
-        assertEquals("gemini-3.8-flash", gemini.model)
-        val openAi = assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.OpenAI, model = null)))
-        assertEquals("https://api.openai.com/v1", openAi.baseUrl)
-        assertEquals("gpt-5.6-luna", openAi.model)
-    }
-
-    @Test
-    fun `OpenRouter with an empty Model runs a priced Claude Sonnet 5_5 at OpenRouter`() {
-        val client = assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.OpenRouter, model = null, baseUrl = "http://x")))
-        assertEquals("https://openrouter.ai/api/v1", client.baseUrl)
-        assertEquals("anthropic/claude-sonnet-5.5", client.model)
-        assertEquals(Prices.cost("claude-sonnet-5-5", Usage(1, 1)), Prices.cost(client.model, Usage(1, 1)))
-    }
-
-    @Test
-    fun `a chosen Model overrides the recommended one`() =
-        assertEquals("gpt-5.6-sol", assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.OpenAI, model = "gpt-5.6-sol"))).model)
-
-    @Test
-    fun `Custom uses the Server URL and the Model as given`() {
-        val client = assertIs<OpenAiCompatibleClient>(modelClient(TestConfig(provider = Provider.Custom, baseUrl = " http://localhost:1234/v1 ", model = "llama3")))
-        assertEquals("http://localhost:1234/v1", client.baseUrl)
-        assertEquals("llama3", client.model)
-    }
-
-    @Test
     fun `Server URL shows only for Custom, API key and Model swap required and optional`() {
         fun visibility(modifier: com.cereal.sdk.statemodifier.StateModifier, provider: Provider?) =
             modifier.getVisibility(form(provider))
@@ -76,7 +40,7 @@ class ProviderPresetTest {
 
     private fun assertRejected(config: TestConfig, reason: String) =
         runBlocking {
-            val result = Host().run(AgentScript({ ScriptedModel() }, tempProfiles()), config)
+            val result = Host().run(AgentScript(tempProfiles()), config)
             assertEquals("Fix these in the task settings: $reason.", assertIs<ExecutionResult.Error>(result).message)
         }
 }

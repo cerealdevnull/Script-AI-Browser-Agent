@@ -30,6 +30,8 @@ import kotlin.test.assertTrue
 
 const val ACCEPTANCE_MODEL = "claude-opus-5-5"
 
+const val ANTHROPIC_OPENAI = "https://api.anthropic.com/v1"
+
 fun env(name: String, default: String? = null): String? = System.getenv(name)?.takeIf { it.isNotBlank() } ?: default
 
 /** The key, or the test is skipped. */
@@ -39,10 +41,11 @@ private val HTTP = OkHttpClient.Builder().readTimeout(10, TimeUnit.MINUTES).call
 private val JSON = "application/json".toMediaType()
 
 /**
- * A local pass-through to the real model API ([upstream], Anthropic by default) that keeps every request body and
- * response: the script's Base URL points here, so this is exactly the model traffic that left the machine.
+ * A local pass-through to the real model API ([upstream], Anthropic's OpenAI-compatible endpoint by default) that keeps
+ * every request body and response: the test-only [OpenAiCompatibleClient] points here, so this is exactly the model
+ * traffic that left the machine. ponytail: L5 (#134) drops this proxy for the client's own record.
  */
-class ModelTraffic(private val upstream: String = AnthropicClient.DEFAULT_BASE_URL) : AutoCloseable {
+class ModelTraffic(private val upstream: String = ANTHROPIC_OPENAI) : AutoCloseable {
     class Exchange(val request: String, val code: Int, val response: String)
 
     val exchanges = CopyOnWriteArrayList<Exchange>()

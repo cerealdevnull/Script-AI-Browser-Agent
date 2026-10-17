@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
@@ -21,7 +23,7 @@ class SecretsTest {
     private fun run(model: ScriptedModel) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(
                     goal = "Log in",
                     startUrl = site.url("login.html"),
@@ -53,7 +55,9 @@ class SecretsTest {
         val result = run(model)
 
         assertIs<ExecutionResult.Success>(result)
-        val outbound = model.requests.joinToString("\n") { it.text() }
+        // Everything that went through provider.llm(), as the client received it.
+        val outbound = host.llm.requests.joinToString("\n") { it.toString() }
+        assertEquals(4, host.llm.requests.size)
         for (value in listOf(EMAIL, PASSWORD, API_KEY)) {
             assertFalse(value in outbound, "model requests contain $value")
             assertFalse(host.logs.any { value in it }, "logs contain $value")
@@ -76,7 +80,7 @@ class SecretsTest {
 
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(
                     goal = "Log in with my email",
                     startUrl = site.url("login.html"),
@@ -118,7 +122,7 @@ class SecretsTest {
 
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(long))),
             )
         }
@@ -138,7 +142,7 @@ class SecretsTest {
                     )
                 },
                 {
-                    val results = (it.messages.last() as Message.ToolResults).results
+                    val results = it.lastResults
                     assertTrue(results.all { r -> r.isError }, results.joinToString { r -> r.text })
                     assertTrue("not an editable text input" in results[0].text, results[0].text)
                     assertTrue("not an editable text input" in results[1].text, results[1].text)
@@ -168,7 +172,7 @@ class SecretsTest {
         fun runAs(email: String) =
             runBlocking {
                 host.run(
-                    AgentScript({ ScriptedModel({ listOf(call("fail", """{"reason": "x"}""")) }) }, profiles),
+                    AgentScript(profiles).also { host.llm.responder = (ScriptedModel({ listOf(call("fail", """{"reason": "x"}""")) }))::respond },
                     TestConfig(goal = "Log in", startUrl = site.url("login.html"), secrets = listOf("email" to Secret(email))),
                 )
             }
@@ -184,12 +188,12 @@ class SecretsTest {
         runBlocking {
             site.pages["me.html"] = """<html><body>$page<input aria-label="Email address"></body></html>"""
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(goal = "Show my balance", startUrl = site.url("me.html"), secrets = listOf("email" to Secret(EMAIL))),
             )
         }
 
-    private val typeEmail: suspend (ModelRequest) -> List<ToolCall> = {
+    private val typeEmail: suspend (LlmRequest) -> List<LlmToolCall> = {
         listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}"""))
     }
 

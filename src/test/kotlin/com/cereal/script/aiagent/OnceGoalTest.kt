@@ -1,5 +1,6 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.component.notification.telegram.model.TelegramParseMode
 import kotlinx.coroutines.runBlocking
@@ -20,7 +21,7 @@ class OnceGoalTest {
     fun tearDown() = site.close()
 
     private fun run(model: ScriptedModel, goal: String = "Tell me whether Long Nose Pliers is in stock") =
-        runBlocking { host.run(AgentScript({ model }, tempProfiles()), TestConfig(goal = goal, startUrl = site.url())) }
+        runBlocking { host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(goal = goal, startUrl = site.url())) }
 
     @Test
     fun `reaches the goal and the summary's first sentence is the headline`() {
@@ -55,11 +56,11 @@ class OnceGoalTest {
     @Test
     fun `when finish retries run out after a rejected flip to true, the run ends with the earlier not met`() {
         var ref = 0
-        val exists = { r: ModelRequest ->
+        val exists = { r: LlmRequest ->
             if (ref == 0) ref = r.ref("link", "Long Nose Pliers")
             """{"ref": "$ref", "condition": "exists", "expected": null}"""
         }
-        val flip = { r: ModelRequest -> listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock.", "check": ${exists(r)}}""")) }
+        val flip = { r: LlmRequest -> listOf(call("finish", """{"goal_met": true, "summary": "Long Nose Pliers is in stock.", "check": ${exists(r)}}""")) }
         val model =
             ScriptedModel(
                 // The Check holds now, so this not-met finish is rejected; the model then answers met instead.
@@ -107,7 +108,7 @@ class OnceGoalTest {
 
     @Test
     fun `a failure before Chrome starts has no page link`() {
-        runBlocking { host.run(AgentScript({ ScriptedModel() }, tempProfiles(), launchBrowser = { _, _ -> error("no Chrome") }), TestConfig(startUrl = site.url())) }
+        runBlocking { host.run(AgentScript(tempProfiles(), launchBrowser = { _, _ -> error("no Chrome") }), TestConfig(startUrl = site.url())) }
 
         val notification = host.notifications.single()
         assertEquals("15158332", notification.discordMessage!!.embeds!!.single().color)
@@ -133,7 +134,7 @@ class OnceGoalTest {
             ScriptedModel(
                 { listOf(call("click", """{"ref": "the pliers link"}""")) },
                 {
-                    val result = (it.messages.last() as Message.ToolResults).results.single()
+                    val result = it.lastResults.single()
                     assertTrue(result.isError)
                     assertEquals("invalid arguments: argument 'ref' must be integer, got \"the pliers link\"", result.text)
                     listOf(call("finish", """{"goal_met": false, "summary": "Not checked."}"""))

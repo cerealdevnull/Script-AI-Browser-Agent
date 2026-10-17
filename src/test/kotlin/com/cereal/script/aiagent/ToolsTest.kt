@@ -1,13 +1,12 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.ImageMediaType
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The rest of the tool allow-list: select, scroll, go_back, wait and the screenshot fallback. */
@@ -21,7 +20,7 @@ class ToolsTest {
     private fun run(model: ScriptedModel, startPath: String) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(goal = "x", startUrl = site.url(startPath), secrets = listOf("email" to Secret("jane@example.com"))),
             )
         }
@@ -104,7 +103,7 @@ class ToolsTest {
                     assertTrue(badScroll.isError, badScroll.text)
                     assertFalse(wait.isError, wait.text)
                     assertFalse(shot.isError, shot.text)
-                    assertNotNull(shot.imageJpeg)
+                    assertEquals(ImageMediaType.Jpeg, it.lastImages.single().mediaType, "the screenshot rides beside the results")
                     listOf(call("navigate", """{"url": "${site.url("product.html")}"}"""))
                 },
                 { listOf(call("go_back")) },
@@ -127,7 +126,7 @@ class ToolsTest {
                 {
                     val shot = it.lastResults.last()
                     assertTrue(shot.isError, shot.text)
-                    assertNull(shot.imageJpeg)
+                    assertTrue(it.lastImages.isEmpty())
                     listOf(call("fail", """{"reason": "x"}"""))
                 },
             )

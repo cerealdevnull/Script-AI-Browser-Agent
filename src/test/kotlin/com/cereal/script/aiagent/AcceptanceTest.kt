@@ -22,11 +22,10 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** One task start of the real script (real Anthropic adapter via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
+/** One task start of the real script (the test-only model client via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
 private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
-    // Presets ignore the Server URL, so point the real Anthropic adapter at the recorder here.
-    private val script = AgentScript({ AnthropicClient(traffic.baseUrl, it.apiKey()!!.reveal(), it.model()!!) }, profiles)
-    private val provider = host.create()
+    private val script = AgentScript(profiles)
+    private val provider = host.create().also { host.model = OpenAiCompatibleClient(traffic.baseUrl, config.apiKey!!.reveal(), config.model!!) }
 
     /** One goal run (one execute), reported as a results row. */
     suspend fun run(label: String): RunStats {

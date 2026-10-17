@@ -275,9 +275,9 @@ enum class RunMode { Once, Repeat }
 
 /** A preset fixes the server and recommends a model; Custom takes both from the form. */
 enum class Provider(val baseUrl: String?, val recommendedModel: String?, val keyUrl: String?) {
-    Anthropic(AnthropicClient.DEFAULT_BASE_URL, "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
+    Anthropic("https://api.anthropic.com", "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
     Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash", "https://aistudio.google.com/apikey"),
-    OpenAI(OpenAiCompatibleClient.DEFAULT_BASE_URL, "gpt-5.6-luna", "https://platform.openai.com/api-keys"),
+    OpenAI("https://api.openai.com/v1", "gpt-5.6-luna", "https://platform.openai.com/api-keys"),
     OpenRouter("https://openrouter.ai/api/v1", "anthropic/claude-sonnet-5.5", "https://openrouter.ai/settings/keys"),
     Custom(null, null, null),
 }

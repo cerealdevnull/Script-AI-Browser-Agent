@@ -1,5 +1,9 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmException
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
+import com.cereal.sdk.component.llm.LlmUsage
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.models.Secret
 import kotlinx.serialization.json.Json
@@ -48,12 +52,12 @@ class RepeatTest {
 
     /** One task start: onStart, then [block] calls execute like the host's Loop does (without the delay), then onFinish. */
     private fun task(
-        model: ModelClient,
+        model: ScriptedModel,
         config: TestConfig = config(),
         clock: Clock = Clock.systemDefaultZone(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
-        val script = AgentScript({ model }, profiles, clock = clock)
+        val script = AgentScript(profiles, clock = clock).also { host.llm.responder = model::respond }
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
@@ -73,7 +77,7 @@ class RepeatTest {
         }
 
     /** Learns: open the product, then finish "not met" with a Check on the stock text. */
-    private fun learning(usage: Usage = Usage(1000, 100)) =
+    private fun learning(usage: LlmUsage = LlmUsage(1000, 0, 0, 100)) =
         ScriptedModel(
             {
                 assertTrue("Run mode: Repeat" in it.lastText, it.lastText)
@@ -83,7 +87,7 @@ class RepeatTest {
             usage = usage,
         )
 
-    private fun notMet(request: ModelRequest) =
+    private fun notMet(request: LlmRequest) =
         """{"goal_met": false, "summary": "Out of stock.", "readouts": null,
             "check": {"ref": "${request.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}}"""
 
@@ -135,7 +139,7 @@ class RepeatTest {
         stock("Out of stock")
 
         // Learning costs $0.42 of $0.50; the replays after it cost nothing and stay quiet.
-        task(learning(Usage(35_000, 3_500)), config(maxTaskCost = 0.5)) { execute ->
+        task(learning(LlmUsage(35_000, 0, 0, 3_500)), config(maxTaskCost = 0.5)) { execute ->
             repeat(3) { assertIs<ExecutionResult.Loop>(execute()) }
         }
         assertEquals(
@@ -217,7 +221,7 @@ class RepeatTest {
         site.pages["product.html"] = javaClass.getResource("/fixtures/product.html")!!.readText().replace("Price: \$14.15", text)
     }
 
-    private fun below(request: ModelRequest, priceText: String, expected: String = "10", decimal: String = ".") =
+    private fun below(request: LlmRequest, priceText: String, expected: String = "10", decimal: String = ".") =
         """{"goal_met": false, "summary": "Not below.", "readouts": null,
             "check": {"ref": "${request.textRef("StaticText", priceText)}", "condition": "below", "expected": "$expected", "decimal": "$decimal"}}"""
 
@@ -246,7 +250,7 @@ class RepeatTest {
     fun `a numeric Check on an element with two numbers, or with a non-plain expected, is rejected with what to fix`() {
         price("Was \$20, now \$14.15")
         site.pages["product.html"] = site.pages["product.html"]!!.replace("In stock", "Out of stock")
-        lateinit var first: ModelRequest // finish errors carry no snapshot: later finishes use this one's refs
+        lateinit var first: LlmRequest // finish errors carry no snapshot: later finishes use this one's refs
         val model =
             ScriptedModel(
                 { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
@@ -270,7 +274,7 @@ class RepeatTest {
         assertEquals(4, model.requests.size)
     }
 
-    private fun change(request: ModelRequest, text: String, condition: String, goalMet: Boolean = false) =
+    private fun change(request: LlmRequest, text: String, condition: String, goalMet: Boolean = false) =
         """{"goal_met": $goalMet, "summary": "Watching.", "readouts": null,
             "check": {"ref": "${request.textRef("StaticText", text)}", "condition": "$condition", "expected": null,
             "decimal": ${if (condition == "decreased") "\",\"" else "null"}}}"""
@@ -364,7 +368,7 @@ class RepeatTest {
     @Test
     fun `a change Check must start false, and decreased needs exactly one number`() {
         price("Was €150 now € 119,99")
-        lateinit var first: ModelRequest
+        lateinit var first: LlmRequest
         val model =
             ScriptedModel(
                 { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
@@ -392,7 +396,7 @@ class RepeatTest {
     @Test
     fun `decreased on an element without a number is rejected`() {
         price("Price on request")
-        lateinit var first: ModelRequest
+        lateinit var first: LlmRequest
         val model =
             ScriptedModel(
                 { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
@@ -417,7 +421,7 @@ class RepeatTest {
         stock("Out of stock")
         // "Out of stock" contains "Out of stock": true on the page, while the model says not met.
         var wrong = ""
-        val disagreeing = { r: ModelRequest ->
+        val disagreeing = { r: LlmRequest ->
             if (wrong.isEmpty()) wrong = notMet(r).replace("\"In stock\"", "\"Out of stock\"")
             listOf(call("finish", wrong))
         }
@@ -445,7 +449,7 @@ class RepeatTest {
         stock("Out of stock")
         // A Check that is true now: finish 1 says not met (rejected), finish 2 resends it as met.
         var ref = ""
-        val check = { r: ModelRequest ->
+        val check = { r: LlmRequest ->
             if (ref.isEmpty()) ref = r.textRef("StaticText", "Out of stock")
             """{"ref": "$ref", "condition": "textContains", "expected": "Out of stock"}"""
         }
@@ -478,7 +482,7 @@ class RepeatTest {
         stock("Out of stock")
         // The Check is false on the page while the model says met: every finish fails verification.
         var ref = ""
-        val met = { r: ModelRequest ->
+        val met = { r: LlmRequest ->
             if (ref.isEmpty()) ref = r.textRef("StaticText", "Out of stock")
             listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "check": {"ref": "$ref", "condition": "textContains", "expected": "In stock"}}"""))
         }
@@ -694,7 +698,7 @@ class RepeatTest {
 
     @Test
     fun `a value revealed in an earlier iteration stays scrubbed in later ones`() {
-        val noCheck: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
+        val noCheck: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
         val model =
             ScriptedModel(
                 { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
@@ -715,10 +719,10 @@ class RepeatTest {
         assertFalse(model.requests.any { EMAIL in it.text() })
     }
 
-    private val down: suspend (ModelRequest) -> List<ToolCall> = { throw ModelException("Model error: HTTP 503: overloaded", transient = true) }
+    private val down: suspend (LlmRequest) -> List<LlmToolCall> = { throw LlmException.Unavailable("overloaded") }
 
     // Finish without a Check: Repeat rejects it (twice at most, then the run ends with nothing to watch).
-    private val noCheck: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
+    private val noCheck: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("finish", """{"goal_met": false, "summary": "No.", "readouts": null, "check": null}""")) }
 
     @Test
     fun `a transient failure loops quietly, three in a row end the task, and a good iteration resets the count`() {
@@ -766,11 +770,11 @@ class RepeatTest {
 
     @Test
     fun `a non-transient failure ends a monitor at once`() {
-        val model = ScriptedModel({ throw ModelException("Model/API key rejected: HTTP 401: invalid x-api-key") })
+        val model = ScriptedModel({ throw LlmException.InvalidRequest("invalid x-api-key") })
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Anthropic returned an error: HTTP 401: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals("Anthropic returned an error: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     private companion object {

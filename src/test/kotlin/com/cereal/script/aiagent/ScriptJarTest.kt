@@ -2,16 +2,14 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.Script
 import com.cereal.sdk.ScriptConfiguration
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmResponse
+import com.cereal.sdk.component.llm.LlmUsage
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import mockwebserver3.Dispatcher
-import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
-import mockwebserver3.RecordedRequest
 import org.junit.jupiter.api.Tag
 import java.io.File
 import java.lang.reflect.InvocationHandler
@@ -32,7 +30,7 @@ import kotlin.test.assertTrue
 
 /**
  * Loads the shrunk `build/cereal/release.jar` like the host does and runs one goal: real Chrome on a fixture page,
- * and the real OpenAI-compatible adapter (Custom provider) talking to a fake Chat Completions API. Run with `./gradlew scriptJarTest`.
+ * and a fake model behind the host's `provider.llm()`. Run with `./gradlew scriptJarTest`.
  */
 @Tag("scriptJar")
 class ScriptJarTest {
@@ -66,13 +64,10 @@ class ScriptJarTest {
             object : com.cereal.sdk.statemodifier.ScriptConfig {
                 override fun valueForKey(key: String) = com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
             }
-        val noKey = runCatching { runBlocking { options.load(empty) } }.exceptionOrNull()
-        assertEquals("Enter your API key to list models", noKey?.message, noKey?.stackTraceToString())
+        assertEquals(emptyList(), runBlocking { options.load(empty) })
 
         FixtureServer().use { site ->
-            MockWebServer().use { api ->
-                api.dispatcher = FakeChatCompletions()
-                api.start()
+            run {
                 val product = javaClass.getResource("/fixtures/product.html")!!.readText()
                 site.pages["product.html"] = product.replace("In stock", "Out of stock")
                 val repeat = loader.loadClass("${scriptClass.packageName}.RunMode").enumConstants.single { it.toString() == "Repeat" }
@@ -83,7 +78,7 @@ class ScriptJarTest {
                         "startUrl" to site.url(),
                         "runMode" to repeat,
                         "provider" to custom,
-                        "baseUrl" to api.url("/v1").toString(),
+                        "baseUrl" to "http://localhost:1/v1",
                         "model" to "llama3",
                         "apiKey" to Secret("test-key"),
                     )
@@ -99,6 +94,7 @@ class ScriptJarTest {
                 assertEquals(listOf(0), scriptClass.constructors.map { it.parameterCount })
                 val script = scriptClass.kotlin.constructors.first().call() as Script<ScriptConfiguration>
                 val host = Host()
+                host.llm.responder = ::fakeModel
                 val provider = host.create()
                 runBlocking {
                     script.onStart(config, provider)
@@ -112,7 +108,7 @@ class ScriptJarTest {
                     }
                 }
 
-                assertEquals(3, api.requestCount)
+                assertEquals(2, host.llm.requests.size) // learning: click, then finish; the replay calls no model
                 val (watching, met) = host.notifications.map { it.message }
                 assertTrue(watching.startsWith("Watching: Long Nose Pliers shows “In stock”."), watching)
                 assertTrue(met.startsWith("Now holds: Long Nose Pliers shows “In stock”\nCost: unknown (no price for llama3) over 2 checks since "), met)
@@ -175,25 +171,17 @@ class ScriptJarTest {
     }
 
     /** Clicks the product link, then finishes "not met" with a Check on the stock text. */
-    private class FakeChatCompletions : Dispatcher() {
-        override fun dispatch(request: RecordedRequest): MockResponse {
-            // The pre-flight's GET /models: a server without one is skipped.
-            if (request.method == "GET") return MockResponse.Builder().code(404).build()
-            val body = request.body!!.utf8()
-            val ref = Regex("""\[(\d+)] link \\"Long Nose Pliers\\"""").find(body)?.groupValues?.get(1)
-            val stock = Regex("""\[(t\d+)] StaticText \\"Out of stock\\"""").find(body)?.groupValues?.get(1)
-            val (name, args) =
-                if (stock != null) {
-                    "finish" to """{"goal_met":false,"summary":"Out of stock.","readouts":null,"check":{"ref":"$stock","condition":"textContains","expected":"In stock"}}"""
-                } else {
-                    "click" to """{"ref":$ref}"""
-                }
-            val call = """[{"id":"c1","type":"function","function":{"name":"$name","arguments":${JsonPrimitive(args)}}}]"""
-            return MockResponse.Builder().body(
-                """{"model":"llama3","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":$call}}],""" +
-                    """"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}""",
-            ).build()
-        }
+    private fun fakeModel(request: LlmRequest): LlmResponse {
+        val body = request.text()
+        val ref = Regex("""\[(\d+)] link "Long Nose Pliers"""").find(body)?.groupValues?.get(1)
+        val stock = Regex("""\[(t\d+)] StaticText "Out of stock"""").find(body)?.groupValues?.get(1)
+        val call =
+            if (stock != null) {
+                call("finish", """{"goal_met":false,"summary":"Out of stock.","readouts":null,"check":{"ref":"$stock","condition":"textContains","expected":"In stock"}}""")
+            } else {
+                call("click", """{"ref":$ref}""")
+            }
+        return response(listOf(call), model = "llama3", usage = LlmUsage(10, 0, 0, 5))
     }
 }
 

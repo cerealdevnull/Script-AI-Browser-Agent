@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -81,9 +83,9 @@ class FrameTest {
 
     private fun config(page: String = "shop.html") = TestConfig(goal = goal, startUrl = site.url(page), runMode = RunMode.Repeat, repeatInterval = 7)
 
-    private fun task(model: ModelClient, page: String = "shop.html", block: suspend (execute: suspend () -> ExecutionResult) -> Unit) =
+    private fun task(model: ScriptedModel, page: String = "shop.html", block: suspend (execute: suspend () -> ExecutionResult) -> Unit) =
         runBlocking {
-            val script = AgentScript({ model }, profiles)
+            val script = AgentScript(profiles).also { host.llm.responder = model::respond }
             val provider = host.create()
             assertTrue(script.onStart(config(page), provider))
             try {
@@ -93,9 +95,9 @@ class FrameTest {
             }
         }
 
-    private val clickRefresh: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Refresh")}}""")) }
+    private val clickRefresh: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Refresh")}}""")) }
 
-    private val notMet: suspend (ModelRequest) -> List<ToolCall> = {
+    private val notMet: suspend (LlmRequest) -> List<LlmToolCall> = {
         val ref = it.textRef("StaticText", "Out of stock")
         val check = """{"ref": "$ref", "condition": "textContains", "expected": "In stock"}"""
         val readouts = """[{"label": "Stock", "ref": "$ref", "value": "Out of stock"}]"""
@@ -108,7 +110,7 @@ class FrameTest {
         task(model) { execute ->
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, model.requests.size)
-            assertTrue("Iframe marked \"not visible\" can't be read or used" in model.requests[0].system, model.requests[0].system)
+            assertTrue("Iframe marked \"not visible\" can't be read or used" in model.requests[0].system!!, model.requests[0].system!!)
 
             assertIs<ExecutionResult.Loop>(execute())
             assertEquals(2, model.requests.size, "the replay makes no model call")

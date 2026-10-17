@@ -16,7 +16,7 @@ class OpenPopupTest {
 
     private fun run(page: String, model: ScriptedModel) {
         site.pages["popup.html"] = page
-        runBlocking { host.run(AgentScript({ model }, tempProfiles()), TestConfig(goal = "Pick size 43", startUrl = site.url("popup.html"))) }
+        runBlocking { host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(goal = "Pick size 43", startUrl = site.url("popup.html"))) }
     }
 
     // ~600 links: far more than the snapshot limit.

@@ -10,6 +10,9 @@ import com.cereal.sdk.component.preference.PreferenceComponent
 import com.cereal.sdk.models.Secret
 import com.cereal.test.ComponentProviderFactory
 import com.cereal.test.TestScriptRunner
+import com.cereal.sdk.component.llm.LlmComponent
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.test.components.FakeLlmComponent
 import com.cereal.test.components.RecordingArtifactComponent
 import com.cereal.test.components.TestComponentProvider
 import com.cereal.test.components.TestComponentProviderFactory
@@ -20,8 +23,17 @@ import com.cereal.sdk.component.userinteraction.WebResourceRequest
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** Stands in for the Cereal host: the test-utils fakes, but with notifications and logs recorded. */
+/**
+ * Stands in for the Cereal host: the test-utils fakes, but with notifications and logs recorded. `provider.llm()` is
+ * [model] when set (a real model, for the acceptance runs), else [llm].
+ */
 class Host : ComponentProviderFactory {
+    /** The fake model behind `provider.llm()`: set its responder (e.g. `ScriptedModel::respond`), read its requests. */
+    val llm = FakeLlmComponent()
+
+    /** A real model to answer instead of [llm]. */
+    var model: LlmComponent? = null
+
     val notifications = mutableListOf<Notification>()
     val logs = mutableListOf<String>()
 
@@ -66,6 +78,9 @@ class Host : ComponentProviderFactory {
                 override suspend fun showContinueButton() = error("showContinueButton is not used")
             },
             RecordingArtifactComponent(),
+            object : LlmComponent {
+                override suspend fun complete(request: LlmRequest) = (model ?: llm).complete(request)
+            },
         )
 
     private fun log(level: String, message: String?) {

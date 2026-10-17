@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -31,7 +33,7 @@ class PopupTest {
         TestConfig(goal = GOAL, startUrl = site.url(start), runMode = runMode, repeatInterval = 7)
 
     private fun task(
-        model: ModelClient,
+        model: ScriptedModel,
         config: TestConfig = config(),
         block: suspend (execute: suspend () -> ExecutionResult) -> Unit,
     ) = runBlocking {
@@ -47,7 +49,7 @@ class PopupTest {
             }
             Browser.launch(dir, timeout)
         }
-        val script = AgentScript({ model }, profiles, launchBrowser = allowPopups)
+        val script = AgentScript(profiles, launchBrowser = allowPopups).also { host.llm.responder = model::respond }
         val provider = host.create()
         assertTrue(script.onStart(config, provider))
         try {
@@ -57,9 +59,9 @@ class PopupTest {
         }
     }
 
-    private fun click(role: String, name: String): suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref(role, name)}}""")) }
+    private fun click(role: String, name: String): suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref(role, name)}}""")) }
 
-    private val met: suspend (ModelRequest) -> List<ToolCall> = {
+    private val met: suspend (LlmRequest) -> List<LlmToolCall> = {
         val check = """{"ref": "${it.textRef("StaticText", "In stock")}", "condition": "textContains", "expected": "In stock"}"""
         listOf(call("finish", """{"goal_met": true, "summary": "In stock.", "readouts": null, "check": $check}"""))
     }
@@ -199,7 +201,7 @@ class PopupTest {
             """<html><body><a href="product.html" target="_blank">Long Nose Pliers</a><p id="n">0 other tabs</p>
             <script>let n = 0; const c = new BroadcastChannel('tabs');
             c.onmessage = () => document.getElementById('n').textContent = ++n + ' other tabs'; c.postMessage('ping')</script></body></html>"""
-        val run: Array<suspend (ModelRequest) -> List<ToolCall>> =
+        val run: Array<suspend (LlmRequest) -> List<LlmToolCall>> =
             arrayOf(
                 { listOf(call("read_page")) },
                 click("link", "Long Nose Pliers"),

@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -15,10 +17,10 @@ class StatusLineTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(model: ModelClient, config: TestConfig = TestConfig(startUrl = site.url())) =
-        runBlocking { host.run(AgentScript({ model }, tempProfiles()), config) }
+    private fun run(model: ScriptedModel, config: TestConfig = TestConfig(startUrl = site.url())) =
+        runBlocking { host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, config) }
 
-    private val finish: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) }
+    private val finish: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("finish", """{"goal_met": true, "summary": "Yes."}""")) }
 
     @Test
     fun `a new user sees Starting Chrome, the host, Thinking, then a plain verb and never a tool name`() {
@@ -26,7 +28,6 @@ class StatusLineTest {
 
         assertEquals(
             listOf(
-                "Checking your API key and model",
                 "Starting Chrome",
                 "Opening 127.0.0.1",
                 "Step 1 of 40 · \$0.00 · Thinking…",
@@ -74,8 +75,8 @@ class StatusLineTest {
         site.pages["index.html"] = """<html><body><a href="tools.html">Tools</a></body></html>"""
         site.pages["tools.html"] = """<html><body><a href="product.html">Long Nose Pliers</a></body></html>"""
         site.pages["product.html"] = """<html><body><p>Out of stock</p></body></html>"""
-        fun click(name: String): suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("link", name)}}""")) }
-        val notMet: suspend (ModelRequest) -> List<ToolCall> = {
+        fun click(name: String): suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("link", name)}}""")) }
+        val notMet: suspend (LlmRequest) -> List<LlmToolCall> = {
             val check = """{"ref": "${it.textRef("StaticText", "Out of stock")}", "condition": "textContains", "expected": "In stock"}"""
             listOf(call("finish", """{"goal_met": false, "summary": "Out of stock.", "readouts": null, "check": $check}"""))
         }
@@ -83,7 +84,7 @@ class StatusLineTest {
         val config = TestConfig(startUrl = site.url(), runMode = RunMode.Repeat, repeatInterval = 7)
         val statuses = mutableListOf<String>()
         runBlocking {
-            val script = AgentScript({ model }, tempProfiles())
+            val script = AgentScript(tempProfiles()).also { host.llm.responder = model::respond }
             val provider = host.create()
             script.onStart(config, provider)
             try {
@@ -114,21 +115,5 @@ class StatusLineTest {
             statuses.map { it.replace(Regex("\\d\\d:\\d\\d"), "hh:mm") },
         )
         assertTrue(statuses.none { "heal" in it.lowercase() || "miss" in it.lowercase() })
-    }
-
-    @Test
-    fun `a retry replaces Thinking with the provider being busy`() {
-        val busy =
-            object : ModelClient {
-                val inner = ScriptedModel(finish)
-
-                override suspend fun send(request: ModelRequest): ModelTurn {
-                    request.onRetry(20_000)
-                    return inner.send(request)
-                }
-            }
-        run(busy)
-
-        assertTrue("Step 1 of 40 · \$0.00 · Anthropic is busy, retrying in 20 s" in host.statuses, host.statuses.toString())
     }
 }

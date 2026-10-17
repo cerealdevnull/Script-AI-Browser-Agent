@@ -4,5 +4,6 @@
   "version_code": 2,
   "sdk_version": "@cereal-sdk-version@",
   "script": "com.cereal.script.aiagent.AiAgentScript",
+  "features": ["llm"],
   "instructions": "Set up your AI provider and model in Settings → AI. Write a goal and a start URL: Once does the task or answers the question, Repeat checks until a condition is true. A visible Chrome window opens, and the agent asks before it buys, pays or sends anything. Your AI provider bills the model's usage; each run is capped at $2 by default."
 }

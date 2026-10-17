@@ -8,6 +8,24 @@ on:
     types: [ 'opened', 'edited', 'reopened', 'synchronize' ]
 
 jobs:
+  sign-off:
+    name: Signed-off commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Every non-merge commit carries Signed-off-by
+        run: |
+          missing=$(git log --no-merges --format='%H %(trailers:key=Signed-off-by,valueonly,separator=;)' \
+            ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | awk 'NF == 1 { print $1 }')
+          if [ -n "$missing" ]; then
+            echo "Commits without Signed-off-by (commit with git commit -s):"
+            git log --no-walk --oneline $missing
+            exit 1
+          fi
+
   test:
     name: Test
     runs-on: ubuntu-latest

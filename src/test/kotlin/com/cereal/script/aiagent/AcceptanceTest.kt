@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
 /** One task start of the real script (the test-only model client via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
 private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
     private val script = AgentScript(profiles)
-    private val provider = host.create().also { host.model = OpenAiCompatibleClient(traffic.baseUrl, config.apiKey!!.reveal(), config.model!!) }
+    private val provider = host.create().also { host.model = OpenAiCompatibleClient(traffic.baseUrl, anthropicKeyOrSkip(), ACCEPTANCE_MODEL) }
 
     /** One goal run (one execute), reported as a results row. */
     suspend fun run(label: String): RunStats {
@@ -102,8 +102,6 @@ class G1MonitorTest {
             TestConfig(
                 goal = "Notify me when Long Nose Pliers is back in stock",
                 startUrl = ui,
-                apiKey = Secret(key),
-                model = ACCEPTANCE_MODEL,
                 runMode = RunMode.Repeat,
                 repeatInterval = 60,
             )
@@ -154,8 +152,6 @@ class G2LoginReadTest {
         TestConfig(
             goal = goal,
             startUrl = Demo.url,
-            apiKey = Secret(key),
-            model = ACCEPTANCE_MODEL,
             secrets = Demo.secrets,
             runMode = runMode,
         )
@@ -241,8 +237,6 @@ class G3BuyTest {
             TestConfig(
                 goal = "Log in and buy one Claw Hammer, paying cash on delivery",
                 startUrl = Demo.url,
-                apiKey = Secret(key),
-                model = ACCEPTANCE_MODEL,
                 secrets = Demo.secrets,
             ),
             host,

@@ -22,11 +22,10 @@ Spec: [desktop-client#69](https://github.com/Cereal-Automation/desktop-client/is
 * kdriver, OkHttp and kotlinx-serialization are bundled (the host's copies are obfuscated). No vendor LLM SDKs.
 * ProGuard rules live in `proguard-rules/`. ProGuard strips Kotlin metadata, so after shrinking `scriptJar` puts the
   compiler's original classes back for what the host reads with kotlin-reflect: the `AgentConfiguration` interface and
-  its nested rows (the form: nullability, defaults), `ModelOptions` (the Model field's `options` objectInstance) and the
-  `*State` objects (each field's `stateModifier` objectInstance; without metadata it is null and the form fails to
-  build). The restored classes call some code by its original name, so `script.pro` keeps those names: in
-  `ModelOptionsKt`, `AgentConfigurationKt` (the shared field checks) and `Provider.getRecommendedModel`. When a
-  restored class calls something new, keep it there too; `ScriptJarTest` loads every field's objects from the jar.
+  its nested rows (the form: nullability, defaults) and the `*State` objects (each field's `stateModifier`
+  objectInstance; without metadata it is null and the form fails to build). The restored classes call some code by its
+  original name, so `script.pro` keeps those names in `AgentConfigurationKt` (the shared field checks). When a restored
+  class calls something new, keep it there too; `ScriptJarTest` loads every field's objects from the jar.
 * `src/main/resources/autoconsent/` is vendored unmodified from npm (version and sha256 in its `VERSION`); never edit
   or port it. Our own bridge to it is `consent-glue.js`. To upgrade: replace both files from the new npm package and
   update `VERSION`.

@@ -41,15 +41,15 @@ class FailureTest {
         val result = run(failingModel(LlmException.InvalidRequest("prompt is too long")))
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic returned an error: prompt is too long.", result.message)
-        assertEquals("Anthropic returned an error: prompt is too long.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals("The model provider returned an error: prompt is too long.", result.message)
+        assertEquals("The model provider returned an error: prompt is too long.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     @Test
     fun `a transient model failure in a Once run says the provider couldn't be reached`() {
         val result = run(failingModel(LlmException.Unavailable("connection reset")))
 
-        assertEquals("Couldn't reach Anthropic.\nTry again later.\nCost: \$0", host.notifications.single().message)
+        assertEquals("Couldn't reach the model provider.\nTry again later.\nCost: \$0", host.notifications.single().message)
         assertIs<ExecutionResult.Error>(result)
     }
 
@@ -91,9 +91,9 @@ class FailureTest {
         val result = run({ response(text = "I can't help with that.", stopReason = StopReason.Refusal) })
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic's model declined this goal: I can't help with that.", result.message)
+        assertEquals("The model provider's model declined this goal: I can't help with that.", result.message)
         assertEquals(
-            "Anthropic's model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
+            "The model provider's model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
             host.notifications.single().message,
         )
     }

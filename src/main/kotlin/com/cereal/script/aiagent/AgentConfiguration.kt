@@ -14,7 +14,6 @@ import com.cereal.sdk.statemodifier.Visibility
 // keyNames are persisted by the host: never change them. Sections are layout only.
 @ScriptConfigurationSections(
     Section("task", "Task"),
-    Section("provider", "AI provider"),
     Section("secrets", "Sign-in secrets"),
     Section("advanced", "Advanced", collapsed = true),
 )
@@ -62,51 +61,8 @@ interface AgentConfiguration : ScriptConfiguration {
     )
     fun repeatInterval(): Int = 300
 
-    @ScriptConfigurationItem(
-        position = 4,
-        keyName = "provider",
-        section = "provider",
-        name = "Provider",
-        description =
-            "The company that runs the AI. You pay them directly with your own API key. Anthropic is recommended. " +
-                "Google Gemini has a free tier with no card, but Google may use your content to improve its products. " +
-                "Custom: any OpenAI-compatible server, such as Ollama or LM Studio.",
-    )
-    fun provider(): Provider = Provider.Anthropic
-
-    @ScriptConfigurationItem(
-        position = 5,
-        keyName = "apiKey",
-        section = "provider",
-        name = "API key",
-        description =
-            "Get a key: [Anthropic](https://console.anthropic.com/settings/keys) · [Gemini](https://aistudio.google.com/apikey) · " +
-                "[OpenAI](https://platform.openai.com/api-keys) · [OpenRouter](https://openrouter.ai/settings/keys). Optional for Custom.",
-        stateModifier = ApiKeyState::class,
-    )
-    fun apiKey(): Secret?
-
-    @ScriptConfigurationItem(
-        position = 6,
-        keyName = "model",
-        section = "provider",
-        name = "Model",
-        description = "Leave empty for the recommended model. Required for Custom.",
-        stateModifier = ModelState::class,
-        options = ModelOptions::class,
-    )
-    fun model(): String?
-
-    // Was "Base URL"; the keyName stays.
-    @ScriptConfigurationItem(
-        position = 7,
-        keyName = "baseUrl",
-        section = "provider",
-        name = "Server URL",
-        description = "Your server's OpenAI-compatible address. The hint is Ollama's; LM Studio's is http://localhost:1234/v1.",
-        stateModifier = ServerUrlState::class,
-    )
-    fun baseUrl(): String?
+    // Retired keyNames, never reuse: "provider", "apiKey", "model", "baseUrl" (the model comes from Settings → AI now;
+    // saved values stay stored and ignored).
 
     @ScriptConfigurationItem(
         position = 31,
@@ -125,7 +81,7 @@ interface AgentConfiguration : ScriptConfiguration {
         name = "Max $ per run",
         description =
             "A run stops once its model calls have cost this many dollars. " +
-                "A typical run on the recommended model costs about \$0.20; simple goals less, long ones up to \$1.",
+                "Models without a known price count as \$0, so only Max steps per run limits them.",
         stateModifier = MaxRunCostState::class,
     )
     fun maxRunCost(): Double = 2.0
@@ -210,30 +166,6 @@ fun startUrlError(startUrl: String?) =
         else -> null
     }
 
-fun apiKeyError(provider: Provider, apiKey: String?) = if (provider != Provider.Custom && apiKey.isNullOrBlank()) "API key is required for $provider" else null
-
-fun modelError(provider: Provider, model: String?): String? {
-    if (provider == Provider.Custom) return if (model.isNullOrBlank()) "Model is required for Custom" else null
-    val id = model?.trim().orEmpty()
-    val owner = modelOwner(id)?.takeIf { it != provider } ?: return null
-    val article = if (owner.name.first() in "AEIOU") "an" else "a"
-    return "`$id` is $article $owner model. Clear Model to use $provider's recommended model."
-}
-
-/** The preset an id clearly belongs to; null when unknown (the pre-flight judges those). */
-private fun modelOwner(model: String) =
-    model.removePrefix("models/").let { id -> // `models/<id>` is Gemini's own form, not OpenRouter's
-        when {
-            "/" in id -> Provider.OpenRouter
-            id.startsWith("claude-") -> Provider.Anthropic
-            id.startsWith("gemini-") -> Provider.Gemini
-            id.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(id) -> Provider.OpenAI
-            else -> null
-        }
-    }
-
-fun serverUrlError(provider: Provider, baseUrl: String?) = if (provider == Provider.Custom && baseUrl.isNullOrBlank()) "Server URL is required for Custom" else null
-
 fun positiveError(name: String, value: Number?) = if (value != null && value.toDouble() <= 0) "$name must be > 0" else null
 
 /** A row as (trimmed label, value); blank or unset counts as empty. */
@@ -273,17 +205,6 @@ fun secretRowErrors(rows: List<Pair<String?, Secret?>>): List<String> =
 
 enum class RunMode { Once, Repeat }
 
-/** A preset fixes the server and recommends a model; Custom takes both from the form. */
-enum class Provider(val baseUrl: String?, val recommendedModel: String?, val keyUrl: String?) {
-    Anthropic("https://api.anthropic.com", "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
-    Gemini("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash", "https://aistudio.google.com/apikey"),
-    OpenAI("https://api.openai.com/v1", "gpt-5.6-luna", "https://platform.openai.com/api-keys"),
-    OpenRouter("https://openrouter.ai/api/v1", "anthropic/claude-sonnet-5.5", "https://openrouter.ai/settings/keys"),
-    Custom(null, null, null),
-}
-
-internal fun ScriptConfig.provider() = (valueForKey("provider") as? ScriptConfigValue.EnumScriptConfigValue)?.value as? Provider ?: Provider.Anthropic
-
 internal fun ScriptConfig.string(key: String) = (valueForKey(key) as? ScriptConfigValue.StringScriptConfigValue)?.value
 
 private fun ScriptConfig.number(key: String): Number? =
@@ -293,8 +214,6 @@ private fun ScriptConfig.number(key: String): Number? =
         is ScriptConfigValue.FloatScriptConfigValue -> v.value
         else -> null
     }
-
-private fun visibleRequiredIf(required: Boolean) = if (required) Visibility.VisibleRequired else Visibility.VisibleOptional
 
 /** An always-visible field with only a static error. */
 abstract class ErrorOnlyState(private val error: (ScriptConfig) -> String?) : StateModifier {
@@ -314,29 +233,6 @@ object MaxStepsState : ErrorOnlyState({ positiveError("Max steps per run", it.nu
 object MaxRunCostState : ErrorOnlyState({ positiveError("Max \$ per run", it.number("maxRunCost")) })
 
 object MaxTaskCostState : ErrorOnlyState({ positiveError("Max \$ per task", it.number("maxTaskCost")) })
-
-object ApiKeyState : StateModifier {
-    override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() != Provider.Custom)
-
-    override fun getError(config: ScriptConfig) =
-        apiKeyError(config.provider(), (config.valueForKey("apiKey") as? ScriptConfigValue.SecretScriptConfigValue)?.value?.reveal())
-}
-
-object ModelState : StateModifier {
-    override fun getVisibility(config: ScriptConfig) = visibleRequiredIf(config.provider() == Provider.Custom)
-
-    override fun getError(config: ScriptConfig) = modelError(config.provider(), config.string("model"))
-
-    override fun getPlaceholder(config: ScriptConfig) = config.provider().recommendedModel
-}
-
-object ServerUrlState : StateModifier {
-    override fun getVisibility(config: ScriptConfig) = if (config.provider() == Provider.Custom) Visibility.VisibleRequired else Visibility.Hidden
-
-    override fun getError(config: ScriptConfig) = serverUrlError(config.provider(), config.string("baseUrl"))
-
-    override fun getPlaceholder(config: ScriptConfig) = "http://localhost:11434/v1"
-}
 
 object CheckEveryState : StateModifier {
     private fun repeat(config: ScriptConfig) = (config.valueForKey("runMode") as? ScriptConfigValue.EnumScriptConfigValue)?.value == RunMode.Repeat

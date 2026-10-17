@@ -65,7 +65,7 @@ val scriptJar =
         // The host reads the config form with kotlin-reflect (nullability, defaults), which needs the Kotlin metadata
         // that ProGuard strips (its -keepkotlinmetadata fails with the stdlib as a library jar). The config classes are
         // kept unrenamed and reference only kept names, so put the compiler's originals back. Likewise the objects the
-        // host reads as objectInstance: ModelOptions (`options`) and the *State classes (`stateModifier`); what they
+        // host reads as objectInstance: the *State classes (`stateModifier`); what they
         // call by original name is kept in script.pro. Not AgentConfigurationKt: it calls renamed code.
         val classes = sourceSets.main.get().output.classesDirs
         doLast {
@@ -73,7 +73,7 @@ val scriptJar =
             FileSystems.newFileSystem(URI.create("jar:${jar.toUri()}"), emptyMap<String, Any>()).use { zip ->
                 val restored =
                     classes.asFileTree.matching {
-                        include("**/AgentConfiguration*.class", "**/ModelOptions.class", "**/aiagent/*State.class")
+                        include("**/AgentConfiguration*.class", "**/aiagent/*State.class")
                         exclude("**/AgentConfigurationKt.class")
                     }
                 restored.visit {

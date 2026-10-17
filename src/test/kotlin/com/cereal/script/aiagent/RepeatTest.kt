@@ -740,11 +740,11 @@ class RepeatTest {
 
             val ended = execute()
             assertIs<ExecutionResult.Error>(ended)
-            assertEquals("The monitor stopped: 3 checks in a row couldn't reach Anthropic.", ended.message)
+            assertEquals("The monitor stopped: 3 checks in a row couldn't reach the model provider.", ended.message)
         }
         assertEquals(7, model.requests.size)
         assertEquals(
-            "The monitor stopped: 3 checks in a row couldn't reach Anthropic.\nStart the task again when it's back.\nCost: \$0",
+            "The monitor stopped: 3 checks in a row couldn't reach the model provider.\nStart the task again when it's back.\nCost: \$0",
             host.notifications.last().message,
         )
     }
@@ -774,7 +774,7 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Anthropic returned an error: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals("The model provider returned an error: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
     }
 
     private companion object {

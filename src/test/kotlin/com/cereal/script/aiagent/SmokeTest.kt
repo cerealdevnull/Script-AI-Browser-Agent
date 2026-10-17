@@ -45,8 +45,7 @@ class SmokeTest {
                 host.model = OpenAiCompatibleClient(traffic.baseUrl, key, MODEL)
                 val config =
                     TestConfig(
-                        goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
-                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode,
+                        goal = site.goal, startUrl = site.url, runMode = site.mode,
                         secrets = site.secrets,
                     )
                 val script = AgentScript(profilesDir = tempProfiles())

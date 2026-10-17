@@ -173,13 +173,12 @@ class ResultMessageTest {
 
     @Test
     fun `the page link is left out before a page loads and when the URL held a secret`() {
-        val scrubber = Scrubber("sk-key")
+        val scrubber = Scrubber()
         scrubber.reveal("token", Secret("abc123"))
         assertEquals(null, pageLink(null, scrubber))
         assertEquals(null, pageLink("about:blank", scrubber))
         assertEquals(null, pageLink("chrome-error://chromewebdata/", scrubber))
         assertEquals(null, pageLink("https://shop.test/account?token=abc123", scrubber))
-        assertEquals(null, pageLink("https://shop.test/?k=sk-key", scrubber))
         assertEquals("https://shop.test/account", pageLink("https://shop.test/account", scrubber))
     }
 }

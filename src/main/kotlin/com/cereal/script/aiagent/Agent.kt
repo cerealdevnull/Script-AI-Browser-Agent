@@ -129,7 +129,7 @@ class Agent(
     private val log: (String) -> Unit,
     private val warn: (String) -> Unit,
     private val secrets: Map<String, Secret> = emptyMap(),
-    private val scrubber: Scrubber = Scrubber(null),
+    private val scrubber: Scrubber = Scrubber(),
     /** The start URL's eTLD+1 plus the user's list; `navigate` and `type_secret` stay within them. */
     private val allowedDomains: Set<String> = setOfNotNull(hostOf(startUrl)?.let(::registrableDomain)),
     /** Asks the user to confirm an irreversible step; false = declined. */

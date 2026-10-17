@@ -3,10 +3,9 @@ package com.cereal.script.aiagent
 import com.cereal.sdk.models.Secret
 
 /**
- * Keeps secret values out of model traffic and logs. Each value revealed through [reveal] becomes `{{secret:name}}`;
- * logs additionally hide the API key.
+ * Keeps secret values out of model traffic and logs. Each value revealed through [reveal] becomes `{{secret:name}}`.
  */
-class Scrubber(private val apiKey: String?) {
+class Scrubber {
     private val revealed = mutableMapOf<String, String>() // value -> name
 
     fun reveal(name: String, secret: Secret): String = secret.reveal().also { if (it.isNotEmpty()) revealed[it] = name }
@@ -19,5 +18,5 @@ class Scrubber(private val apiKey: String?) {
     fun forModel(text: String): String =
         revealed.entries.sortedByDescending { it.key.length }.fold(text) { t, (value, name) -> t.replace(value, "{{secret:$name}}") }
 
-    fun forLog(text: String): String = forModel(text).let { if (apiKey.isNullOrEmpty()) it else it.replace(apiKey, "{{api_key}}") }
+    fun forLog(text: String): String = forModel(text)
 }

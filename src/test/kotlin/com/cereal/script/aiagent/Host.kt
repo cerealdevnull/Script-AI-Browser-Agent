@@ -96,10 +96,6 @@ class Host : ComponentProviderFactory {
         TestScriptRunner(recording).run(config, this)
         return recording.last
     }
-
-    /** Runs the task action named [name] from the task's menu, like the host does while the task is stopped. */
-    suspend fun act(script: Script<AgentConfiguration>, name: String, config: AgentConfiguration): String? =
-        script.taskActions().single { it.name == name }.run(config, provider)
 }
 
 /** One task's preferences. TestPreferenceComponent shares one static map across every instance, i.e. across tasks. */

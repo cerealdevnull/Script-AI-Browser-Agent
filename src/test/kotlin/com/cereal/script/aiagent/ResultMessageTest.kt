@@ -82,10 +82,10 @@ class ResultMessageTest {
 
     @Test
     fun `a not-met Repeat run shows the action line before the summary`() {
-        val n = ResultMessage(Kind.NotMet, "Goal not met", action = FORGET_STEPS, summary = "Still sold out.", cost = "Cost: $0", url = url).notification(goal)
-        assertEquals("$FORGET_STEPS\nStill sold out.", n.discordMessage!!.embeds!!.single().description)
+        val n = ResultMessage(Kind.NotMet, "Goal not met", action = RELEARN, summary = "Still sold out.", cost = "Cost: $0", url = url).notification(goal)
+        assertEquals("$RELEARN\nStill sold out.", n.discordMessage!!.embeds!!.single().description)
         assertEquals(
-            "⏳ <b>Goal not met</b>\n$FORGET_STEPS\n<i>Still sold out.</i>\n<a href=\"$url\">Open page</a> · Cost: $0\n$goal",
+            "⏳ <b>Goal not met</b>\n$RELEARN\n<i>Still sold out.</i>\n<a href=\"$url\">Open page</a> · Cost: $0\n$goal",
             n.telegramMessage!!.text,
         )
     }

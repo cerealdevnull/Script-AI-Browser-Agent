@@ -137,14 +137,14 @@ class FailureTest {
     }
 
     @Test
-    fun `stuck on a sign-in page points at Forget learned steps and sign out`() {
+    fun `stuck on a sign-in page signs out`() {
         val login: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Login")}}""")) }
 
         run(ScriptedModel(*Array(7) { login })::respond, startUrl = site.url("login.html"))
 
         assertEquals(
             "The agent got stuck repeating the same action on ${site.url("login.html")}.\n" +
-                "Pick Forget learned steps and sign out in the task's menu, then start the task again.\nCost: \$0.04",
+                "$SIGNED_OUT\nCost: \$0.04",
             host.notifications.single().message,
         )
     }

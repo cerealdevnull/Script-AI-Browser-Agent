@@ -142,7 +142,6 @@ internal class AgentScript(
                 },
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
-                configuration.provider().let { if (it == Provider.Custom) "your server" else it.name },
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)

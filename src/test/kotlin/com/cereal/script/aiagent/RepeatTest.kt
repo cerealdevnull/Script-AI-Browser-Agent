@@ -731,6 +731,7 @@ class RepeatTest {
 
         task(model) { execute ->
             repeat(2) { assertEquals(7_000, assertIs<ExecutionResult.Loop>(execute()).delay) }
+            assertTrue(host.statuses.any { Regex("""Couldn't reach the AI provider \(2 of 3\) · retrying \d\d:\d\d""").matches(it) }, host.statuses.toString())
             assertIs<ExecutionResult.Loop>(execute()) // a good iteration
             // Later replays miss, so each asks the model again.
             site.pages["index.html"] = "<html><body><nav><a href=\"order.html\">Hammers</a></nav></body></html>"
@@ -740,11 +741,11 @@ class RepeatTest {
 
             val ended = execute()
             assertIs<ExecutionResult.Error>(ended)
-            assertEquals("The monitor stopped: 3 checks in a row couldn't reach Anthropic.", ended.message)
+            assertEquals("The monitor stopped: 3 checks in a row couldn't reach the AI provider.", ended.message)
         }
         assertEquals(7, model.requests.size)
         assertEquals(
-            "The monitor stopped: 3 checks in a row couldn't reach Anthropic.\nStart the task again when it's back.\nCost: \$0",
+            "The monitor stopped: 3 checks in a row couldn't reach the AI provider.\nStart the task again when it's back.\nCost: \$0",
             host.notifications.last().message,
         )
     }
@@ -774,7 +775,26 @@ class RepeatTest {
 
         task(model) { execute -> assertIs<ExecutionResult.Error>(execute()) }
 
-        assertEquals("Anthropic returned an error: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals("The AI provider returned an error: invalid x-api-key.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+    }
+
+    @Test
+    fun `no AI provider set up mid-monitor ends the task at once`() {
+        stock("Out of stock")
+        val model =
+            ScriptedModel(
+                { listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) },
+                { listOf(call("finish", notMet(it))) },
+                { throw LlmException.NotConfigured() },
+            )
+
+        task(model) { execute ->
+            assertIs<ExecutionResult.Loop>(execute()) // learns a Check
+            site.pages["index.html"] = "<html><body><nav><a href=\"order.html\">Hammers</a></nav></body></html>" // the replay misses
+            val ended = assertIs<ExecutionResult.Error>(execute())
+            assertEquals("No AI provider is set up. Choose one in Settings → AI.", ended.message)
+        }
+        assertEquals("No AI provider is set up. Choose one in Settings → AI.\nCost: \$0", host.notifications.last().message)
     }
 
     private companion object {

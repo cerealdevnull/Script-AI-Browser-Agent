@@ -137,8 +137,6 @@ class Agent(
     private val runMode: RunMode = RunMode.Once,
     /** The task's one-line status in the Cereal UI: what the agent is doing right now. */
     private val status: suspend (String) -> Unit = {},
-    /** Who serves the model, as user text names it: "Anthropic", "your server". */
-    private val providerName: String = "the model provider",
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
     private val turns = mutableListOf<LlmTurn>()
@@ -162,6 +160,9 @@ class Agent(
     /** True once a replay missed and the model took over mid-run. */
     var healed = false
         private set
+
+    private fun providerError(e: LlmException) =
+        Outcome.Failed("The AI provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
 
     /** The start page didn't load: nothing to show the model, so the run ends before step 1. */
     private fun startFailed(e: PageLoadException) =
@@ -201,13 +202,13 @@ class Agent(
                     llm.complete(LlmRequest(SYSTEM_PROMPT, turns.toList(), LLM_TOOLS))
                 } catch (e: LlmException) {
                     warn("step ${steps + 1}: the model call failed: ${e::class.simpleName}: ${e.message}")
-                    // ponytail: interim wording; L2 (#131) settles the headline and action per LlmException kind.
+                    // The client's message is the headline, except a rejected request, whose message is the provider's own text.
                     return when (e) {
                         is LlmException.RateLimited, is LlmException.Unavailable ->
-                            Outcome.Failed("Couldn't reach $providerName.", steps, "Try again later.", unreachable = providerName)
-                        is LlmException.InvalidRequest, is LlmException.InvalidOutput ->
-                            Outcome.Failed("${providerName.cap()} returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
-                        is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "The model call was rejected.", steps)
+                            Outcome.Failed(e.message ?: "Couldn't reach $AI_PROVIDER.", steps, unreachable = AI_PROVIDER)
+                        is LlmException.InvalidRequest -> providerError(e)
+                        is LlmException.InvalidOutput -> providerError(e)
+                        is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "The AI provider rejected the request.", steps)
                     }
                 }
             steps++
@@ -227,7 +228,7 @@ class Agent(
             )
             if (response.stopReason == StopReason.Refusal) {
                 val why = sentence(response.text.takeIf { it.isNotBlank() } ?: "no reason given")
-                return Outcome.Failed("${providerName.cap()}'s model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
+                return Outcome.Failed("The model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
             }
             if (calls.isEmpty()) {
                 warn("step $steps: the model stopped without calling finish (stop reason: ${response.stopReason})")
@@ -759,6 +760,7 @@ class Agent(
     }
 
     companion object {
+        private const val AI_PROVIDER = "the AI provider"
         private const val MAX_FINISH_RETRIES = 2
         private const val FLIPPED = "goal_met was false; change the check, not goal_met. If you misread the page, call fail."
         private const val STUCK_REPEATS = 3
@@ -934,4 +936,3 @@ class Agent(
 /** Ends [s] as a sentence: adds a full stop unless it already ends in one. */
 private fun sentence(s: String) = s.trimEnd().let { if (it.endsWith('.') || it.endsWith('!') || it.endsWith('?')) it else "$it." }
 
-private fun String.cap() = replaceFirstChar(Char::uppercase)

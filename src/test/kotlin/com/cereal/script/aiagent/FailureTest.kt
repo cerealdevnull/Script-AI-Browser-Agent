@@ -8,6 +8,7 @@ import com.cereal.sdk.component.llm.StopReason
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -26,31 +27,51 @@ class FailureTest {
 
     private fun failingModel(e: LlmException): suspend (LlmRequest) -> LlmResponse = { throw e }
 
+    /** One model failure in a Once run: the Error's message, then the notification's headline, action and cost lines. */
+    private fun failure(e: LlmException): Pair<String, String> {
+        val result = assertIs<ExecutionResult.Error>(run(failingModel(e)))
+        return result.message to host.notifications.single().message
+    }
+
     @Test
-    fun `a rejected key ends the run with the client's message`() {
+    fun `no AI provider set up ends the run with the client's message and no action`() {
+        val (headline, message) = failure(LlmException.NotConfigured())
+
+        assertEquals("No AI provider is set up. Choose one in Settings → AI.", headline)
+        assertEquals("$headline\nCost: \$0", message)
+    }
+
+    @Test
+    fun `a rejected key ends the run with the client's message and no action`() {
         val key = "The AI provider rejected the API key. Check it in Settings → AI."
-        val result = run(failingModel(LlmException.Authentication(key)))
 
-        assertIs<ExecutionResult.Error>(result)
-        assertEquals(key, result.message)
-        assertEquals("$key\nCost: \$0", host.notifications.single().message)
+        assertEquals(key to "$key\nCost: \$0", failure(LlmException.Authentication(key)))
     }
 
     @Test
-    fun `a model 4xx ends the run with Error, the provider's short message and a start-again action`() {
-        val result = run(failingModel(LlmException.InvalidRequest("prompt is too long")))
+    fun `a rejected request names the AI provider, quotes its text and says start again`() {
+        val headline = "The AI provider returned an error: prompt is too long."
 
-        assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic returned an error: prompt is too long.", result.message)
-        assertEquals("Anthropic returned an error: prompt is too long.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals(headline to "$headline\nStart the task again.\nCost: \$0", failure(LlmException.InvalidRequest("prompt is too long")))
     }
 
     @Test
-    fun `a transient model failure in a Once run says the provider couldn't be reached`() {
-        val result = run(failingModel(LlmException.Unavailable("connection reset")))
+    fun `a rate limit in a Once run fails at once with the client's message and no action`() {
+        val busy = "The AI provider is busy. Try again in a minute."
 
-        assertEquals("Couldn't reach Anthropic.\nTry again later.\nCost: \$0", host.notifications.single().message)
-        assertIs<ExecutionResult.Error>(result)
+        assertEquals(busy to "$busy\nCost: \$0", failure(LlmException.RateLimited(30.seconds, busy)))
+    }
+
+    @Test
+    fun `an unavailable provider in a Once run fails at once with the client's message and no action`() {
+        val down = "Couldn't reach the AI provider. Check your connection."
+
+        assertEquals(down to "$down\nCost: \$0", failure(LlmException.Unavailable(down)))
+    }
+
+    @Test
+    fun `an unavailable provider without a message says it couldn't reach the AI provider`() {
+        assertEquals("Couldn't reach the AI provider.", failure(LlmException.Unavailable()).first)
     }
 
     @Test
@@ -87,13 +108,13 @@ class FailureTest {
     }
 
     @Test
-    fun `a refusal names the provider and says retrying won't help`() {
+    fun `a refusal says the model declined, without naming a provider, and that retrying won't help`() {
         val result = run({ response(text = "I can't help with that.", stopReason = StopReason.Refusal) })
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic's model declined this goal: I can't help with that.", result.message)
+        assertEquals("The model declined this goal: I can't help with that.", result.message)
         assertEquals(
-            "Anthropic's model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
+            "The model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
             host.notifications.single().message,
         )
     }

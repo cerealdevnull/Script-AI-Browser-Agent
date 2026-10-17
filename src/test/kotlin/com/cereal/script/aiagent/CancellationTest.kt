@@ -31,7 +31,7 @@ class CancellationTest {
                     modelCalled.complete(Unit)
                     awaitCancellation()
                 })
-            val script = AgentScript({ model }, profiles)
+            val script = AgentScript(profiles).also { host.llm.responder = model::respond }
             val recording = RecordingScript(script)
             val config = TestConfig(startUrl = site.url())
 

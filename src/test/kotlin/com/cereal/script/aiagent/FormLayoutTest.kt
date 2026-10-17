@@ -54,14 +54,13 @@ class FormLayoutTest {
     }
 
     @Test
-    fun `fields are grouped into Task, AI provider, Sign-in secrets and a collapsed Advanced section`() {
+    fun `fields are grouped into Task, Sign-in secrets and a collapsed Advanced section`() {
         val sections =
             AgentConfiguration::class.java.getAnnotation(com.cereal.sdk.ScriptConfigurationSections::class.java)!!.value
                 .map { Triple(it.key, it.name, it.collapsed) }
         assertEquals(
             listOf(
                 Triple("task", "Task", false),
-                Triple("provider", "AI provider", false),
                 Triple("secrets", "Sign-in secrets", false),
                 Triple("advanced", "Advanced", true),
             ),
@@ -73,47 +72,24 @@ class FormLayoutTest {
                 .sortedBy { it.position }
                 .groupBy({ it.section }, { it.keyName })
         assertEquals(listOf("goal", "startUrl", "runMode", "repeatInterval"), bySection["task"])
-        assertEquals(listOf("provider", "apiKey", "model", "baseUrl"), bySection["provider"])
+        assertEquals(setOf("task", "secrets", "advanced"), bySection.keys, "no provider section: Settings → AI picks the model")
         assertEquals(listOf("secrets"), bySection["secrets"])
         assertEquals(listOf("allowedDomains", "maxSteps", "maxRunCost", "maxTaskCost"), bySection["advanced"])
         assertEquals(null, bySection[""], "unsectioned fields render first")
     }
 
     @Test
-    fun `Start URL and Server URL show their examples as placeholders, not in the description`() {
+    fun `Start URL shows its example as a placeholder, not in the description`() {
         assertEquals("https://example.com", StartUrlState.getPlaceholder(form()))
-        assertEquals("http://localhost:11434/v1", ServerUrlState.getPlaceholder(form("provider" to ScriptConfigValue.EnumScriptConfigValue(Provider.Custom))))
-        val items =
-            AgentConfiguration::class.java.methods
-                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
-                .associateBy { it.keyName }
-        assertEquals("The page the agent starts on.", items.getValue("startUrl").description)
-        val server = items.getValue("baseUrl").description
-        assertTrue("e.g." !in server && "11434" !in server && "LM Studio's is http://localhost:1234/v1" in server, server)
+        assertEquals("The page the agent starts on.", item("startUrl").description)
     }
 
     @Test
-    fun `the API key description is one line of provider links`() {
-        val items =
-            AgentConfiguration::class.java.methods
-                .mapNotNull { it.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java) }
-                .associateBy { it.keyName }
-        assertEquals(
-            "Get a key: [Anthropic](https://console.anthropic.com/settings/keys) · [Gemini](https://aistudio.google.com/apikey) · " +
-                "[OpenAI](https://platform.openai.com/api-keys) · [OpenRouter](https://openrouter.ai/settings/keys). Optional for Custom.",
-            items.getValue("apiKey").description,
-        )
-    }
-
-    @Test
-    fun `a new user sees 40 steps, 2 dollars per run, 5 per task and the typical run cost, always visible`() {
+    fun `a new user sees 40 steps, 2 dollars per run, 5 per task and what an unpriced model costs, always visible`() {
         val fresh =
             object : AgentConfiguration {
                 override fun goal() = ""
                 override fun startUrl() = ""
-                override fun apiKey() = null
-                override fun model() = null
-                override fun baseUrl() = null
                 override fun secrets() = null
                 override fun allowedDomains() = null
             }
@@ -125,7 +101,7 @@ class FormLayoutTest {
                 .associateBy { it.keyName }
         assertTrue(
             items.getValue("maxRunCost").description.endsWith(
-                "A typical run on the recommended model costs about \$0.20; simple goals less, long ones up to \$1.",
+                "Models without a known price count as \$0, so only Max steps per run limits them.",
             ),
         )
         assertTrue(items.getValue("maxTaskCost").description.endsWith("Resets when the task restarts."))
@@ -135,15 +111,15 @@ class FormLayoutTest {
     }
 
     @Test
-    fun `the manifest instructions are a short quick start in form order`() {
-        val manifest = javaClass.getResource("/manifest.json")!!.readText()
-        val text = Json.parseToJsonElement(manifest).jsonObject.getValue("instructions").jsonPrimitive.content
-        assertTrue(text.length <= 360, "${text.length} chars") // "under about 350"
-        assertTrue(text.split(". ").size in 3..4, text)
-        val order = listOf("provider", "API key", "goal", "start URL", "Once", "Repeat", "Chrome", "asks before", "\$0.20", "\$2")
-        assertEquals(order.sortedBy { text.indexOf(it) }, order, text)
-        assertTrue(order.all { it in text }, text)
-        listOf("Secret", "Allowed domains", "On next start").forEach { assertTrue(it !in text, it) }
+    fun `the manifest points at Settings → AI and is version 2`() {
+        val manifest = Json.parseToJsonElement(javaClass.getResource("/manifest.json")!!.readText()).jsonObject
+        assertEquals(
+            "Set up your AI provider and model in Settings → AI. Write a goal and a start URL: Once does the task or answers the question, " +
+                "Repeat checks until a condition is true. A visible Chrome window opens, and the agent asks before it buys, pays or sends anything. " +
+                "Your AI provider bills the model's usage; each run is capped at \$2 by default.",
+            manifest.getValue("instructions").jsonPrimitive.content,
+        )
+        assertEquals("2", manifest.getValue("version_code").jsonPrimitive.content)
     }
 
     @Test
@@ -154,18 +130,16 @@ class FormLayoutTest {
         assertTrue(sections.all { it in text }, text)
         fun section(name: String) = text.substringAfter(name).substringBefore("\n## ")
         assertTrue((1..4).all { "\n$it. " in section("## Getting started") } && "\n5. " !in text, "4 numbered steps")
-        assertTrue(section("## Features").trim().lines().last().contains("Works with Anthropic or any OpenAI-compatible server"))
+        assertTrue("Settings → AI" in section("## Getting started").substringAfter("\n1. ").substringBefore("\n"))
+        assertTrue("cost is tracked for common models, and shown as unknown otherwise" in section("## Features"))
         val useCases = section("## Use Cases").trim().lines()
         assertEquals(4, useCases.size, useCases.toString())
         assertTrue(useCases.all { "Once" in it || "Repeat" in it }, useCases.toString())
         // The Goal field's example pair, word for word.
         listOf("tell me whether Long Nose Pliers is in stock", "notify me when Long Nose Pliers is in stock").forEach { assertTrue(it in text, it) }
         val requirements = section("## Requirements")
-        listOf(
-            "billed by your provider; about \$0.20 a run with the default model (an estimate); default limits are \$2 per run and \$5 per task, which you can change",
-            "or any OpenAI-compatible server, including local ones such as Ollama or LM Studio",
-        ).forEach { assertTrue(it in requirements, it) }
-        Provider.entries.mapNotNull { it.keyUrl }.forEach { assertTrue(it in requirements, it) }
+        assertTrue("billed by your AI provider; default limits are \$2 per run and \$5 per task, which you can change" in requirements, requirements)
+        listOf("API key", "\$0.20", "https://", "Works with Anthropic").forEach { assertTrue(it !in text.substringBefore("Includes @duckduckgo"), it) }
         assertTrue(Regex("\\bChecks?\\b").find(text) == null, "check is lower-case")
     }
 

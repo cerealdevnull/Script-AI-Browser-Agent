@@ -1,13 +1,11 @@
 package com.cereal.script.aiagent
 
 import com.cereal.sdk.ScriptConfigurationItem
-import com.cereal.sdk.models.Secret
 import com.cereal.sdk.statemodifier.ScriptConfig
 import com.cereal.sdk.statemodifier.ScriptConfigValue
 import com.cereal.sdk.statemodifier.ScriptConfigValue.DoubleScriptConfigValue
 import com.cereal.sdk.statemodifier.ScriptConfigValue.EnumScriptConfigValue
 import com.cereal.sdk.statemodifier.ScriptConfigValue.IntScriptConfigValue
-import com.cereal.sdk.statemodifier.ScriptConfigValue.SecretScriptConfigValue
 import com.cereal.sdk.statemodifier.ScriptConfigValue.StringScriptConfigValue
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -16,56 +14,10 @@ import kotlin.test.assertNull
 /** V1: red text under the field at Save, read through each field's stateModifier as the host does. */
 class StaticErrorsTest {
     @Test
-    fun `a new user leaves API key empty and sees the error under API key`() {
-        assertEquals("API key is required for Anthropic", error("apiKey"))
-        assertEquals("API key is required for Gemini", error("apiKey", "provider" to EnumScriptConfigValue(Provider.Gemini)))
-        assertNull(error("apiKey", "apiKey" to SecretScriptConfigValue(Secret("k"))))
-        assertNull(error("apiKey", "provider" to EnumScriptConfigValue(Provider.Custom)))
-    }
-
-    @Test
     fun `Goal blank`() {
         assertEquals("Goal is required", error("goal", "goal" to StringScriptConfigValue(" ")))
         assertEquals("Goal is required", error("goal"))
         assertNull(error("goal", "goal" to StringScriptConfigValue("check stock")))
-    }
-
-    @Test
-    fun `Model empty for Custom only`() {
-        assertEquals("Model is required for Custom", error("model", "provider" to EnumScriptConfigValue(Provider.Custom)))
-        assertNull(error("model", "provider" to EnumScriptConfigValue(Provider.Custom), "model" to StringScriptConfigValue("llama3")))
-        assertNull(error("model"))
-    }
-
-    @Test
-    fun `a Model from another preset is flagged at Save`() {
-        fun model(provider: Provider, id: String) =
-            error("model", "provider" to EnumScriptConfigValue(provider), "model" to StringScriptConfigValue(id))
-        assertEquals(
-            "`gpt-5.6-luna` is an OpenAI model. Clear Model to use Anthropic's recommended model.",
-            model(Provider.Anthropic, "gpt-5.6-luna"),
-        )
-        assertEquals("`o4-mini` is an OpenAI model. Clear Model to use Gemini's recommended model.", model(Provider.Gemini, "o4-mini"))
-        assertEquals("`claude-sonnet-5-5` is an Anthropic model. Clear Model to use OpenAI's recommended model.", model(Provider.OpenAI, "claude-sonnet-5-5"))
-        assertEquals("`gemini-3.8-flash` is a Gemini model. Clear Model to use OpenRouter's recommended model.", model(Provider.OpenRouter, "gemini-3.8-flash"))
-        assertEquals(
-            "`anthropic/claude-sonnet-5.5` is an OpenRouter model. Clear Model to use Anthropic's recommended model.",
-            model(Provider.Anthropic, "anthropic/claude-sonnet-5.5"),
-        )
-        assertNull(model(Provider.OpenAI, "gpt-5.6-luna"))
-        assertNull(model(Provider.OpenRouter, "openai/gpt-5.6-luna"))
-        assertNull(model(Provider.Anthropic, "my-finetune"))
-        assertNull(model(Provider.Anthropic, "opus"))
-        assertNull(model(Provider.Custom, "gpt-5.6-luna"))
-        assertNull(model(Provider.Custom, "anthropic/claude-sonnet-5.5"))
-        assertNull(model(Provider.Gemini, "models/gemini-3.8-flash"))
-        assertEquals("`models/gemini-3.8-flash` is a Gemini model. Clear Model to use OpenAI's recommended model.", model(Provider.OpenAI, "models/gemini-3.8-flash"))
-    }
-
-    @Test
-    fun `a hidden Server URL is ignored unless Provider is Custom`() {
-        assertNull(error("baseUrl", "baseUrl" to StringScriptConfigValue("not a url")))
-        assertEquals("Server URL is required for Custom", error("baseUrl", "provider" to EnumScriptConfigValue(Provider.Custom)))
     }
 
     @Test

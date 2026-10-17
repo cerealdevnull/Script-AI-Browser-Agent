@@ -4,11 +4,13 @@ Opt-in runs that prove the three goals end to end with a real `claude-opus-5-5` 
 (`practicesoftwaretesting.com`). They are tagged `acceptance`: `./gradlew test` never runs them. Each one
 **costs real money** and skips itself when `ANTHROPIC_API_KEY` is not set.
 
-Every run drives the real script (real Chrome, real Anthropic adapter). The test points that adapter at a local
-pass-through that forwards to `api.anthropic.com` and keeps every request and response. The tests use it to check
-that the password never left the machine, that `fallbacks: "default"` was accepted, and that later steps read from the
-prompt cache. Each goal run prints a table row (`ACCEPTANCE | …`) and appends it to `build/acceptance/results.md`.
-Paste those rows into the tables below.
+Every run drives the real script (real Chrome). Its model calls go through the test-only `LlmComponent`
+(`OpenAiCompatibleClient` in `src/test`), which calls Anthropic's OpenAI-compatible endpoint
+(`api.anthropic.com/v1`) and records every request and response. It is the only real-model path in the tests. Unlike
+the desktop client it doesn't validate tool arguments, retry or cache; that's accepted, because these runs judge the
+agent, not the client. The tests check the recorded requests to prove the password never left the machine. Each goal
+run prints a table row (`ACCEPTANCE | …`) and appends it to `build/acceptance/results.md`. Paste those rows into the
+tables below.
 
 ## Setup
 
@@ -46,20 +48,21 @@ What each test asserts:
 | Test | Asserts |
 |---|---|
 | G1 | Repeat, "Notify me when Long Nose Pliers is back in stock". Run 1 returns `Loop` and sends no notification. Runs 2..N (`ACCEPTANCE_G1_REPLAYS`, default 3) return `Loop` with 0 model calls. After stock is set > 0: one notification naming the product, then `Success`. |
-| G2 Once | "Log in and tell me the invoice number, date and total of my most recent order". One notification that contains the latest invoice's number, date (`yyyy-mm-dd`) and total, read from the Toolshop API after the run. The password never appears in captured model traffic. |
+| G2 Once | "Log in and tell me the invoice number, date and total of my most recent order". One notification that contains the latest invoice's number, date (`yyyy-mm-dd`) and total, read from the Toolshop API after the run. |
 | G2 Repeat | A monitor goal that needs the same login ("…notify me when the invoice number of my most recent order is no longer INV-…"), because Repeat needs a not-yet Check. Run 1 learns (`Loop`). A second task start, with a fresh logged-out Chrome profile, replays the login from the cache with 0 model calls and **0 confirmations**. |
 | G3 Decline | "Log in and buy one Claw Hammer, paying cash on delivery". One confirmation appears and is declined: a normal finish, `Success("Stopped: you declined to … Nothing was done.")`, and the API shows the same invoice count as before. |
 | G3 Accept | Same goal, every confirmation accepted: `Success`, at least one confirmation shown, exactly one new invoice holding exactly one Claw Hammer. |
-| all | Every request carried `fallbacks: "default"` and the API accepted it. In any multi-step run, some step after the first had cache-read tokens > 0. |
+| G2, G3 | The password appears in none of the recorded model requests. |
 
-Columns of a results row: steps (model calls), $ (priced by the response `model` with `Prices`), cache-read tokens per
-step, which fallback model answered if any, confirmations shown, and the `ExecutionResult`.
+Columns of a results row: steps (model calls), $ (each response priced from its `LlmResponse.model` and `usage` with
+`Prices`; a model without a price counts as $0), the models that answered, confirmations shown, and the
+`ExecutionResult`.
 
 ## Results
 
-| Goal | Run | Steps | $ | Cache-read tokens per step | Fallback answered | Confirmations | Result |
-|---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| Goal | Run | Steps | $ | Model | Confirmations | Result |
+|---|---|---|---|---|---|---|
+| | | | | | | |
 
 Date / script commit:
 
@@ -81,9 +84,10 @@ the defaults in `AgentConfiguration.kt` and update spec #69.
 ## Smoke check on real sites (not pass/fail)
 
 `SmokeTest` runs the real script on five real sites, to find what breaks outside Toolshop. It uses
-`gemini-3.8-flash` (the Gemini preset's recommended model) through the OpenAI-compatible provider (cents per site) and skips itself without
+`gemini-3.8-flash` through the same test-only `LlmComponent`, on Gemini's OpenAI-compatible endpoint (cents per site), and skips itself without
 `GEMINI_API_KEY`. The goals are read-only and every confirmation is declined. For each site it writes the log,
-the notifications and every model request and response to `build/smoke/<id>/`, to be judged afterwards.
+the notifications and every model request and response the client recorded (`traffic.json`) to `build/smoke/<id>/`,
+to be judged afterwards.
 
 ```bash
 read -s "GEMINI_API_KEY?Gemini API key: " && export GEMINI_API_KEY

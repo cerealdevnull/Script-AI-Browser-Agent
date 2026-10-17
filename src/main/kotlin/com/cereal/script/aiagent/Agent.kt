@@ -1,5 +1,13 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.ImageMediaType
+import com.cereal.sdk.component.llm.LlmComponent
+import com.cereal.sdk.component.llm.LlmException
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmTool
+import com.cereal.sdk.component.llm.LlmTurn
+import com.cereal.sdk.component.llm.StopReason
+import com.cereal.sdk.component.llm.UserPart
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -15,13 +23,22 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.net.URI
+import java.util.Base64
+
+/** [schema] is a JSON schema object; the script validates every tool call against it. */
+class ToolDef(val name: String, val description: String, val schema: JsonObject)
+
+/** A model's tool call with its arguments parsed (an unparseable or non-object argument string reads as no arguments). */
+class ToolCall(val id: String, val name: String, val args: JsonObject)
+
+/** [imageJpeg]: a base64 JPEG sent beside the result (the screenshot fallback). */
+class ToolResult(val callId: String, val text: String, val isError: Boolean = false, val imageJpeg: String? = null)
 
 /** A labelled value read verbatim from the page ([text]), and where to find it again. */
 class Readout(val label: String, val text: String, val fingerprint: Fingerprint)
@@ -104,14 +121,14 @@ class Caps(val maxSteps: Int, val maxRunCost: Double, val maxTaskCost: Double, v
 /** One goal run: the model drives [browser], one step (model call) at a time, until finish, fail or a cap. */
 class Agent(
     private val browser: Browser,
-    private val model: ModelClient,
+    private val llm: LlmComponent,
     private val goal: String,
     private val startUrl: String,
     private val caps: Caps,
     private val log: (String) -> Unit,
     private val warn: (String) -> Unit,
     private val secrets: Map<String, Secret> = emptyMap(),
-    private val scrubber: Scrubber = Scrubber(null),
+    private val scrubber: Scrubber = Scrubber(),
     /** The start URL's eTLD+1 plus the user's list; `navigate` and `type_secret` stay within them. */
     private val allowedDomains: Set<String> = setOfNotNull(hostOf(startUrl)?.let(::registrableDomain)),
     /** Asks the user to confirm an irreversible step; false = declined. */
@@ -119,14 +136,11 @@ class Agent(
     private val runMode: RunMode = RunMode.Once,
     /** The task's one-line status in the Cereal UI: what the agent is doing right now. */
     private val status: suspend (String) -> Unit = {},
-    /** Who serves the model, as user text names it: "Anthropic", "your server". */
-    private val providerName: String = "the model provider",
-    /** The configured model has a price; false shows `$?` from the first status line. */
-    private val modelPriced: Boolean = true,
 ) {
     private val irreversible = Irreversible(browser, allowedDomains)
-    private val messages = mutableListOf<Message>()
-    private val unpriced = mutableSetOf<String?>()
+    private val turns = mutableListOf<LlmTurn>()
+    private val unpriced = mutableSetOf<String>()
+    private var rejectedTurns = 0
     var steps = 0
         private set
 
@@ -134,8 +148,8 @@ class Agent(
     var cost = 0.0
         private set
 
-    /** Models that answered a step with no known price; [cost] counts only the priced steps. */
-    val unpricedModels: Set<String?> get() = unpriced
+    /** Some step had no known price (an unpriced model or a rejected turn); [cost] counts only the priced steps. */
+    val costUnknown: Boolean get() = unpriced.isNotEmpty() || rejectedTurns > 0
     private var finishRejections = 0
     private var earlierFalse: String? = null // the summary of a rejected finish that said goal_met false
     private val repeats = mutableMapOf<String, Int>() // (url, tool, target fingerprint, args) -> times seen
@@ -170,58 +184,72 @@ class Agent(
             } catch (e: PageLoadException) {
                 return startFailed(e)
             }
-        messages +=
-            Message.User(
-                scrubber.forModel(
-                    "Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() +
-                        resume.orEmpty() + "\n" + pageResult(current, follow = resume != null),
-                ),
+        val goalMessage =
+            scrubber.forModel(
+                "Goal: $goal\n${if (runMode == RunMode.Repeat) REPEAT_MODE else ONCE_MODE}\nStart page: $startUrl\n" + secretsNote() +
+                    resume.orEmpty() + "\n" + pageResult(current, follow = resume != null),
             )
+        turns += LlmTurn.User(listOf(UserPart.Text(goalMessage)))
         while (true) {
             capReached()?.let { return it }
             status("${progress(steps + 1)} · Thinking…")
-            // Retries and rate-limit waits happen inside send(): they are not steps.
-            val onRetry: suspend (Long) -> Unit = { status("${progress(steps + 1)} · ${providerName.cap()} is busy, retrying in ${(it + 999) / 1000} s") }
-            val turn =
+            // The client's retries and rate-limit waits happen inside complete(): they are not steps.
+            // A turn the client rejected for bad tool arguments is still a turn: its calls go through validate() below.
+            var rejected: LlmException.InvalidOutput? = null
+            val response =
                 try {
-                    model.send(ModelRequest(SYSTEM_PROMPT, TOOLS, messages.toList(), onRetry))
-                } catch (e: ModelException) {
-                    warn("step ${steps + 1}: the model call failed: ${e.message}")
-                    // ponytail: the cause is parsed from the message; give ModelException fields if more wording needs it.
-                    val message = e.message!!
-                    // A rejected key arrives already worded by the pre-flight (#58).
-                    if (e.status == 401 || e.status == 403) return Outcome.Failed(message, steps)
-                    if (!e.transient) return Outcome.Failed("${providerName.cap()} returned an error: ${sentence(message.substringAfter(": "))}", steps, "Start the task again.")
-                    val cause = HTTP_STATUS.find(message)?.value ?: "network error"
-                    return Outcome.Failed("Couldn't reach $providerName ($cause).", steps, "Try again later.", unreachable = providerName)
+                    llm.complete(LlmRequest(SYSTEM_PROMPT, turns.toList(), LLM_TOOLS))
+                } catch (e: LlmException) {
+                    val provider = AI_PROVIDER.replaceFirstChar(Char::titlecase)
+                    // The client's message is the headline, except a rejected request, whose message is the provider's own text.
+                    val failed =
+                        when (e) {
+                            is LlmException.InvalidOutput -> null.also { rejected = e }
+                            is LlmException.RateLimited, is LlmException.Unavailable ->
+                                Outcome.Failed(e.message ?: "Couldn't reach $AI_PROVIDER.", steps, unreachable = AI_PROVIDER)
+                            is LlmException.InvalidRequest ->
+                                Outcome.Failed("$provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
+                            is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "$provider rejected the request.", steps)
+                        }
+                    if (failed != null) {
+                        warn("step ${steps + 1}: the model call failed: ${e::class.simpleName}: ${e.message}")
+                        return failed
+                    }
+                    null
                 }
             steps++
-            messages += Message.Assistant(turn)
+            val turn = response?.assistantTurn ?: rejected!!.assistantTurn
+            turns += turn
+            val u = response?.usage?.toUsage()
             val stepCost =
-                Prices.cost(turn.model, turn.usage) ?: 0.0.also {
-                    if (unpriced.add(turn.model)) warn("no price known for model ${turn.model}: counted as \$0, only the step cap applies")
+                if (response == null) {
+                    rejectedTurns++
+                    warn("step $steps: the client rejected the model's tool arguments (${rejected!!.message}): counted as \$0, checking each call")
+                    0.0
+                } else {
+                    Prices.cost(response.model, u!!) ?: 0.0.also {
+                        if (unpriced.add(response.model)) warn("no price known for model ${response.model}: counted as \$0, only the step cap applies")
+                    }
                 }
             cost += stepCost
-            val u = turn.usage
-            val actions = turn.toolCalls.map { describe(it) }
-            turn.text?.takeIf { it.isNotBlank() }?.let { log("step $steps, model says: ${it.trim()}") }
-            log(
-                "step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} " +
-                    "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
-            )
-            if (turn.stopReason == "refusal") {
-                val why = sentence(turn.text?.takeIf { it.isNotBlank() } ?: "no reason given")
-                return Outcome.Failed("${providerName.cap()}'s model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
+            val calls = turn.toolCalls.map { ToolCall(it.id, it.name, runCatching { Json.parseToJsonElement(it.argumentsJson) as JsonObject }.getOrElse { JsonObject(emptyMap()) }) }
+            val actions = calls.map { describe(it) }
+            turn.text.takeIf { it.isNotBlank() }?.let { log("step $steps, model says: ${it.trim()}") }
+            val tokens = u?.let { "${it.input} in / ${it.output} out / ${it.cacheRead} cache-read tokens" } ?: "tokens unknown"
+            log("step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} ($tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})")
+            if (response?.stopReason == StopReason.Refusal) {
+                val why = sentence(response.text.takeIf { it.isNotBlank() } ?: "no reason given")
+                return Outcome.Failed("The model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
             }
-            if (turn.toolCalls.isEmpty()) {
-                warn("step $steps: the model stopped without calling finish (stop reason: ${turn.stopReason})")
+            if (calls.isEmpty()) {
+                warn("step $steps: the model stopped without calling finish (stop reason: ${response?.stopReason ?: "rejected output"})")
                 return Outcome.Failed("The model stopped without an answer.", steps, "Start the task again.")
             }
 
             val results = mutableListOf<ToolResult>()
             // The refs the model saw; an earlier call in this turn may have taken a snapshot that renumbered them.
             val versions = browser.refsVersion to browser.textRefsVersion
-            for ((i, call) in turn.toolCalls.withIndex()) {
+            for ((i, call) in calls.withIndex()) {
                 val error = validate(call)
                 if (error != null) {
                     warn("step $steps: ${call.name} has invalid arguments: $error")
@@ -305,7 +333,12 @@ class Agent(
                 results += if (seen == STUCK_REPEATS) ToolResult(call.id, "$REPEATING\n${result.text}", isError = true, result.imageJpeg) else result
                 if (results.last().isError) warn("step $steps: ${actions[i]} failed: ${results.last().text.lineSequence().first().removePrefix("error: ")}") else logNewUrl()
             }
-            messages += Message.ToolResults(results.map { ToolResult(it.callId, scrubber.forModel(it.text), it.isError, it.imageJpeg) })
+            // Every result first, then the screenshots beside them.
+            turns +=
+                LlmTurn.User(
+                    results.map { UserPart.ToolResult(it.callId, scrubber.forModel(it.text), it.isError) } +
+                        results.mapNotNull { r -> r.imageJpeg?.let { UserPart.Image(Base64.getDecoder().decode(it), ImageMediaType.Jpeg) } },
+                )
         }
     }
 
@@ -315,7 +348,7 @@ class Agent(
     /** `$0.12`; `$?` when no step had a price; `$0.12 + unknown` when only some did. */
     private fun spent() =
         when {
-            unpriced.isEmpty() && modelPriced -> usd(cost)
+            !costUnknown -> usd(cost)
             cost == 0.0 -> "\$?"
             else -> "${usd(cost)} + unknown"
         }
@@ -738,6 +771,7 @@ class Agent(
     }
 
     companion object {
+        private const val AI_PROVIDER = "the AI provider"
         private const val MAX_FINISH_RETRIES = 2
         private const val FLIPPED = "goal_met was false; change the check, not goal_met. If you misread the page, call fail."
         private const val STUCK_REPEATS = 3
@@ -851,14 +885,18 @@ class Agent(
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),
             )
 
-        /** Strict-mode schema: every property required, nothing else allowed. A property is a type name or a schema. */
+        private val LLM_TOOLS = TOOLS.map { LlmTool(it.name, it.description, it.schema.toString()) }
+
+        private fun JsonObject.isNullable() = (get("type") as? JsonArray)?.contains(JsonPrimitive("null")) == true
+
+        /** Every non-nullable property required, nothing else allowed. A property is a type name or a schema. */
         private fun schema(vararg props: Pair<String, Any>) =
             buildJsonObject {
                 put("type", "object")
                 putJsonObject("properties") {
                     props.forEach { (name, type) -> put(name, type as? JsonObject ?: buildJsonObject { put("type", type as String) }) }
                 }
-                putJsonArray("required") { props.forEach { add(JsonPrimitive(it.first)) } }
+                putJsonArray("required") { props.filterNot { (it.second as? JsonObject)?.isNullable() == true }.forEach { add(JsonPrimitive(it.first)) } }
                 put("additionalProperties", false)
             }
 
@@ -891,8 +929,8 @@ class Agent(
                 val props = schema["properties"]!!.jsonObject
                 val prefix = if (path.isEmpty()) "" else "$path."
                 value.keys.firstOrNull { it !in props }?.let { return "unexpected argument '$prefix$it'" }
-                for (name in schema["required"]!!.jsonArray.map { it.jsonPrimitive.content }) {
-                    // A missing nullable argument counts as null (not every provider enforces strict schemas).
+                for (name in props.keys) {
+                    // A missing nullable argument counts as null.
                     check(props[name]!!.jsonObject, value[name] ?: JsonNull, "$prefix$name")
                         ?.let { return if (value[name] == null) "missing argument '$prefix$name'" else it }
                 }
@@ -908,9 +946,6 @@ class Agent(
     }
 }
 
-private val HTTP_STATUS = Regex("HTTP \\d+")
-
 /** Ends [s] as a sentence: adds a full stop unless it already ends in one. */
 private fun sentence(s: String) = s.trimEnd().let { if (it.endsWith('.') || it.endsWith('!') || it.endsWith('?')) it else "$it." }
 
-private fun String.cap() = replaceFirstChar(Char::uppercase)

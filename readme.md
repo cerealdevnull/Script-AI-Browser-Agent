@@ -1,6 +1,6 @@
 # AI Browser Agent (Cereal script)
 
-A Cereal marketplace script: the user types a goal and a start URL, picks a model with their own API key, and the
+A Cereal marketplace script: the user types a goal and a start URL, picks the model (and with it the AI provider) in the client's Settings → AI, and the
 script drives their installed Chrome (headed, one profile per task) until the goal is met, fails, or a limit is hit.
 Spec: [desktop-client#69](https://github.com/Cereal-Automation/desktop-client/issues/69). Vocabulary: `CONTEXT.md`.
 
@@ -19,14 +19,13 @@ Spec: [desktop-client#69](https://github.com/Cereal-Automation/desktop-client/is
 ## Packaging rules
 * `kotlin-stdlib`, `kotlinx-coroutines` and `cereal-sdk` are provided by the host and never bundled.
   Kotlin is pinned to the host's stdlib version (2.3.21).
-* kdriver, OkHttp and kotlinx-serialization are bundled (the host's copies are obfuscated). No vendor LLM SDKs.
+* kdriver and kotlinx-serialization are bundled (the host's copies are obfuscated). OkHttp is test-only. No vendor LLM SDKs.
 * ProGuard rules live in `proguard-rules/`. ProGuard strips Kotlin metadata, so after shrinking `scriptJar` puts the
   compiler's original classes back for what the host reads with kotlin-reflect: the `AgentConfiguration` interface and
-  its nested rows (the form: nullability, defaults), `ModelOptions` (the Model field's `options` objectInstance) and the
-  `*State` objects (each field's `stateModifier` objectInstance; without metadata it is null and the form fails to
-  build). The restored classes call some code by its original name, so `script.pro` keeps those names: in
-  `ModelOptionsKt`, `AgentConfigurationKt` (the shared field checks) and `Provider.getRecommendedModel`. When a
-  restored class calls something new, keep it there too; `ScriptJarTest` loads every field's objects from the jar.
+  its nested rows (the form: nullability, defaults) and the `*State` objects (each field's `stateModifier`
+  objectInstance; without metadata it is null and the form fails to build). The restored classes call some code by its
+  original name, so `script.pro` keeps those names in `AgentConfigurationKt` (the shared field checks). When a restored
+  class calls something new, keep it there too; `ScriptJarTest` loads every field's objects from the jar.
 * `src/main/resources/autoconsent/` is vendored unmodified from npm (version and sha256 in its `VERSION`); never edit
   or port it. Our own bridge to it is `consent-glue.js`. To upgrade: replace both files from the new npm package and
   update `VERSION`.

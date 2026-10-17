@@ -16,7 +16,7 @@ class ConsentTest {
 
     private fun run(page: String): ScriptedModel {
         val model = ScriptedModel({ listOf(call("finish", """{"goal_met": true, "summary": "Read it."}""")) })
-        runBlocking { host.run(AgentScript({ model }, tempProfiles()), TestConfig(goal = "Read the headline", startUrl = site.url(page))) }
+        runBlocking { host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(goal = "Read the headline", startUrl = site.url(page))) }
         return model
     }
 
@@ -35,7 +35,7 @@ class ConsentTest {
     fun `the model is told to reject a banner that is left, never accept all`() {
         val model = run("index.html")
         assertTrue(
-            "If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all." in model.requests.first().system,
+            "If a cookie consent banner blocks the page, reject it or choose necessary-only; never accept all." in model.requests.first().system!!,
         )
     }
 

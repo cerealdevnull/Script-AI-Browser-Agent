@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -17,10 +19,10 @@ class RerenderTest {
     fun tearDown() = site.close()
 
     private fun run(model: ScriptedModel, path: String) =
-        runBlocking { host.run(AgentScript({ model }, tempProfiles()), TestConfig(goal = "Add the hammer to the cart", startUrl = site.url(path))) }
+        runBlocking { host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(goal = "Add the hammer to the cart", startUrl = site.url(path))) }
 
     /** Clicks Add to cart once the page has replaced it (it does so 2 s after load). */
-    private val clickAfterRerender: suspend (ModelRequest) -> List<ToolCall> = {
+    private val clickAfterRerender: suspend (LlmRequest) -> List<LlmToolCall> = {
         val ref = it.ref("button", "Add to cart")
         delay(3000)
         listOf(call("click", """{"ref": $ref}"""))

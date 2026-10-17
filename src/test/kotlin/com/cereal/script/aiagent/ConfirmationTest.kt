@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.component.userinteraction.UserInteractionCanceledException
 import com.cereal.sdk.models.Secret
@@ -21,7 +23,7 @@ class ConfirmationTest {
     private fun run(model: ScriptedModel, startPath: String) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(
                     goal = "Buy one Claw Hammer",
                     startUrl = site.url(startPath),
@@ -31,7 +33,7 @@ class ConfirmationTest {
         }
 
     private fun logIn(button: String, irreversible: Boolean) =
-        arrayOf<suspend (ModelRequest) -> List<ToolCall>>(
+        arrayOf<suspend (LlmRequest) -> List<LlmToolCall>>(
             { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
             { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Password")}, "field": "password"}""")) },
             { listOf(call("click", """{"ref": ${it.ref("button", button)}, "irreversible": $irreversible, "reason": "log in"}""")) },

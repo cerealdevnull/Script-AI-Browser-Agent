@@ -1,13 +1,21 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.ImageMediaType
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmResponse
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import com.cereal.sdk.models.Secret
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The rest of the tool allow-list: select, scroll, go_back, wait and the screenshot fallback. */
@@ -18,10 +26,10 @@ class ToolsTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(model: ScriptedModel, startPath: String) =
+    private fun run(model: ScriptedModel, startPath: String, respond: suspend (LlmRequest) -> LlmResponse = model::respond) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = respond },
                 TestConfig(goal = "x", startUrl = site.url(startPath), secrets = listOf("email" to Secret("jane@example.com"))),
             )
         }
@@ -74,6 +82,36 @@ class ToolsTest {
     }
 
     @Test
+    fun `a turn the client rejected for bad arguments runs its valid calls and errors the invalid ones`() {
+        val model =
+            ScriptedModel(
+                { listOf(call("read_page"), call("click", """{"ref": "x"}""")) },
+                {
+                    val (read, click) = it.lastResults
+                    assertFalse(read.isError, read.text)
+                    assertTrue(click.isError && click.text.startsWith("invalid arguments: "), click.text)
+                    listOf(call("finish", """{"goal_met": true, "summary": "x"}"""))
+                },
+            )
+
+        run(model, "login.html", model.rejecting(1))
+
+        assertEquals(2, model.requests.size)
+    }
+
+    @Test
+    fun `no nullable property is required, so the client never demands an argument the model may leave out`() {
+        fun nullableRequired(schema: JsonObject, path: String): List<String> {
+            val props = schema["properties"]?.jsonObject ?: return schema["items"]?.let { nullableRequired(it.jsonObject, "$path[]") }.orEmpty()
+            val required = schema["required"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+            val nullable = props.filter { (_, p) -> (p.jsonObject["type"] as? JsonArray)?.contains(JsonPrimitive("null")) == true }.keys
+            return required.filter { it in nullable }.map { "$path.$it" } + props.flatMap { (n, p) -> nullableRequired(p.jsonObject, "$path.$n") }
+        }
+
+        assertEquals(emptyList(), Agent.TOOLS.flatMap { nullableRequired(it.schema, it.name) })
+    }
+
+    @Test
     fun `the tool set is exactly the allow-list`() {
         assertEquals(
             setOf("read_page", "click", "type", "type_secret", "select", "scroll", "navigate", "go_back", "wait", "screenshot", "finish", "fail"),
@@ -104,7 +142,7 @@ class ToolsTest {
                     assertTrue(badScroll.isError, badScroll.text)
                     assertFalse(wait.isError, wait.text)
                     assertFalse(shot.isError, shot.text)
-                    assertNotNull(shot.imageJpeg)
+                    assertEquals(ImageMediaType.Jpeg, it.lastImages.single().mediaType, "the screenshot rides beside the results")
                     listOf(call("navigate", """{"url": "${site.url("product.html")}"}"""))
                 },
                 { listOf(call("go_back")) },
@@ -127,7 +165,7 @@ class ToolsTest {
                 {
                     val shot = it.lastResults.last()
                     assertTrue(shot.isError, shot.text)
-                    assertNull(shot.imageJpeg)
+                    assertTrue(it.lastImages.isEmpty())
                     listOf(call("fail", """{"reason": "x"}"""))
                 },
             )

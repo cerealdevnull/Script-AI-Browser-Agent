@@ -1,5 +1,6 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -19,12 +20,12 @@ class ReadoutTest {
     private fun run(model: ScriptedModel) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(goal = "Tell me the latest invoice's number, date and total", startUrl = site.url("invoices.html")),
             )
         }
 
-    private fun readouts(request: ModelRequest, number: String = "INV-2026000042") =
+    private fun readouts(request: LlmRequest, number: String = "INV-2026000042") =
         """[{"label": "Invoice number", "ref": "${request.textRef("cell", "INV-2026000042")}", "value": "$number"},
             {"label": "Date", "ref": "${request.textRef("cell", "2026-10-01")}", "value": "2026-10-01"},
             {"label": "Total", "ref": "${request.textRef("cell", "$27.30")}", "value": "$27.30"}]"""
@@ -71,7 +72,7 @@ class ReadoutTest {
             ScriptedModel(
                 { listOf(call("click", """{"ref": "${it.textRef("cell", "INV-2026000042")}"}""")) },
                 {
-                    val result = (it.messages.last() as Message.ToolResults).results.single()
+                    val result = it.lastResults.single()
                     assertTrue(result.isError)
                     assertTrue("read-only" in result.text, result.text)
                     listOf(call("finish", """{"goal_met": false, "summary": "Nothing to click.", "readouts": null}"""))
@@ -85,7 +86,7 @@ class ReadoutTest {
     fun `a Readout whose text does not match the reported value is rejected and retried at most twice`() {
         // Refs stay valid until the next snapshot, so every retry reuses those from the first request.
         var wrongReadouts = ""
-        val wrong = { r: ModelRequest ->
+        val wrong = { r: LlmRequest ->
             if (wrongReadouts.isEmpty()) wrongReadouts = readouts(r, number = "INV-1")
             listOf(call("finish", """{"goal_met": true, "summary": "Found it.", "readouts": $wrongReadouts}"""))
         }
@@ -93,7 +94,7 @@ class ReadoutTest {
             ScriptedModel(
                 wrong,
                 {
-                    val result = (it.messages.last() as Message.ToolResults).results.single()
+                    val result = it.lastResults.single()
                     assertTrue(result.isError)
                     assertTrue("INV-2026000042" in result.text && "INV-1" in result.text, result.text)
                     wrong(it)

@@ -1,5 +1,12 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmUsage
+
+/** Token usage of one call; [input] is the uncached input (the SDK's `LlmUsage.inputUncached`). */
+class Usage(val input: Long, val output: Long, val cacheRead: Long = 0, val cacheWrite: Long = 0)
+
+fun LlmUsage.toUsage() = Usage(inputUncached.toLong(), output.toLong(), cacheRead.toLong(), cacheWrite.toLong())
+
 /**
  * $ per million tokens. [input] is uncached input; cache writes are the 5-minute TTL rate. [over100K] replaces every
  * rate when the prompt (input + cache reads + cache writes) is over 100,000 tokens.

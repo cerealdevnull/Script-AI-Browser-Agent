@@ -26,7 +26,6 @@ import java.util.UUID
 class AiAgentScript : Script<AgentConfiguration> by AgentScript()
 
 internal class AgentScript(
-    private val newModelClient: (AgentConfiguration) -> ModelClient = ::modelClient,
     private val profilesDir: Path = Path.of(System.getProperty("user.home"), ".cereal", "ai-browser-agent", "profiles"),
     private val pageLoadTimeoutMs: Long = 60_000,
     private val clock: Clock = Clock.systemDefaultZone(),
@@ -45,8 +44,8 @@ internal class AgentScript(
     private var startedOn = LocalDate.now(clock)
     private var healing = false
 
-    // Models without a known price used this task start (the task total is then partly unknown).
-    private var taskUnpriced = setOf<String?>()
+    // Some step this task start had no known price (the task total is then partly unknown).
+    private var taskCostUnknown = false
 
     // One per task: values revealed in an earlier run (e.g. a replayed login) stay scrubbed in later Loop iterations.
     private var scrubber: Scrubber? = null
@@ -56,12 +55,6 @@ internal class AgentScript(
 
     // Repeat: the 80% Max $ per task warning was sent this task start.
     private var capWarned = false
-
-    // The pre-flight key and model check passed this task start.
-    private var checked = false
-
-    // The no-price line is shown once per task, before its first step.
-    private var priceAnnounced = false
 
     // True until the first execute() after a task start.
     private var firstRun = true
@@ -96,12 +89,10 @@ internal class AgentScript(
         checks = 0
         startedOn = LocalDate.now(clock)
         healing = false
-        taskUnpriced = emptySet()
+        taskCostUnknown = false
         scrubber = null
         transientFailures = 0
-        checked = false
         capWarned = false
-        priceAnnounced = false
         firstRun = true
         return true
     }
@@ -113,10 +104,8 @@ internal class AgentScript(
     ): ExecutionResult {
         val report = Report(configuration, provider, statusUpdate)
         configError?.let { return report.error(it, cost = COST_ZERO) }
-        val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
+        val scrubber = scrubber ?: Scrubber().also { scrubber = it }
         val log = provider.logger()
-        val model = newModelClient(configuration)
-        if (!checked) preflight(configuration, model, report, statusUpdate) { log.warn(scrubber.forLog(it)) }?.let { return it }
         val browser =
             browser?.takeIf { it.alive } ?: try {
                 this.browser?.let { dead ->
@@ -133,29 +122,11 @@ internal class AgentScript(
                 return report.error("Couldn't start Google Chrome.", "Check that Chrome is installed and opens normally, then start the task again.", COST_ZERO)
             }
         browser.log = { log.info(scrubber.forLog(it)) }
-        val modelId = configuration.modelId()
-        val modelPriced = Prices.cost(modelId, Usage(0, 0)) != null
-        if (!priceAnnounced && !modelPriced) {
-            val line = "No price known for $modelId: the \$ caps can't stop this task, only Max steps can."
-            log.warn(line)
-            statusUpdate(line)
-        }
-        priceAnnounced = true
         val caps = Caps(configuration.maxSteps(), configuration.maxRunCost(), configuration.maxTaskCost(), taskSpent)
         val agent =
             Agent(
                 browser,
-                // A key revoked mid-run gets the pre-flight's wording.
-                object : ModelClient {
-                    override suspend fun send(request: ModelRequest) =
-                        try {
-                            model.send(request)
-                        } catch (e: ModelException) {
-                            if (e.status != 401 && e.status != 403) throw e
-                            log.error(scrubber.forLog(e.message.orEmpty()))
-                            throw ModelException(keyRejected(configuration.provider()), status = e.status)
-                        }
-                },
+                provider.llm(),
                 configuration.goal(),
                 configuration.startPage(),
                 caps,
@@ -171,8 +142,6 @@ internal class AgentScript(
                 },
                 configuration.runMode(),
                 { statusUpdate(scrubber.forLog(it)) },
-                configuration.provider().let { if (it == Provider.Custom) "your server" else it.name },
-                modelPriced,
             )
         val repeat = configuration.runMode() == RunMode.Repeat
         val key = cacheKey(configuration)
@@ -181,7 +150,7 @@ internal class AgentScript(
         // A replay that ends not met where the learned run met it: the learned steps likely no longer fit.
         var learnedMet = false
         val cost = {
-            "Cost: ${spent(agent.cost, agent.unpricedModels)}" +
+            "Cost: ${spent(agent.cost, agent.costUnknown)}" +
                 when {
                     repeat -> ""
                     agent.healed -> " (the page changed, so it re-learned part of it)"
@@ -204,12 +173,12 @@ internal class AgentScript(
                 throw e
             } catch (e: Exception) {
                 // A thrown exception becomes a generic host error (and a report carrying the config): return Error.
-                // Logged as scrubbed text, not as a Throwable: its message could carry a secret or the API key.
+                // Logged as scrubbed text, not as a Throwable: its message could carry a secret.
                 log.error(scrubber.forLog("goal run failed: ${e.stackTraceToString()}"))
                 return report.error("Something went wrong inside the script.", "Start the task again. If it happens again, send the task log to the developer.", cost())
             } finally {
                 taskSpent += agent.cost
-                taskUnpriced += agent.unpricedModels
+                taskCostUnknown = taskCostUnknown || agent.costUnknown
                 checks++
             }
         // Repeat: "Goal met" only ever comes from a verified Check; an unverified one is not met and loops quietly.
@@ -245,7 +214,7 @@ internal class AgentScript(
         // Between checks the task row tells when it checked and when it checks next; the times keep each line unique.
         val notYet =
             if (repeat && outcome is Outcome.Finished && !outcome.goalMet) {
-                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${spent(taskSpent, taskUnpriced).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
+                "Not yet · checked ${hhmm(0)} · next ${hhmm(configuration.repeatInterval())} · ${spent(taskSpent, taskCostUnknown).removeSuffix(".00")} of ${usd(configuration.maxTaskCost()).removeSuffix(".00")} total"
             } else {
                 null
             }
@@ -274,7 +243,7 @@ internal class AgentScript(
             log.warn(scrubber.forLog("transient failure $transientFailures of $MAX_TRANSIENT_FAILURES, retrying at the next interval: $verdict"))
             return retry(configuration, scrubber.forLog((outcome as Outcome.Failed).unreachable!!), statusUpdate)
         }
-        val total = { "Cost: ${spent(taskSpent, taskUnpriced)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
+        val total = { "Cost: ${spent(taskSpent, taskCostUnknown)} over ${if (checks == 1) "1 check" else "$checks checks"} since ${startedOn.format(DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH))}" }
         return when (outcome) {
             is Outcome.Failed if repeat && outcome.transient && !badStartUrl ->
                 report.error(
@@ -298,7 +267,7 @@ internal class AgentScript(
                             cost = cost(),
                             status = false,
                         )
-                    !healing -> report.notify(Kind.Watching, "The page changed, so I re-learned it for ${spent(agent.cost, agent.unpricedModels)}. Still watching.", status = false)
+                    !healing -> report.notify(Kind.Watching, "The page changed, so I re-learned it for ${spent(agent.cost, agent.costUnknown)}. Still watching.", status = false)
                 }
                 healing = agent.healed
                 ExecutionResult.Loop(notYet!!, configuration.repeatInterval() * 1000L)
@@ -343,38 +312,6 @@ internal class AgentScript(
         val browser = browser ?: return
         this.browser = null
         withContext(NonCancellable) { browser.close() }
-    }
-
-    /**
-     * Once per task start, before Chrome: a free lookup of the key and model. Returns the result that ends this run, or
-     * null to go on. A transient failure fails a Once run; Repeat retries it under the three-in-a-row rule.
-     */
-    private suspend fun preflight(
-        config: AgentConfiguration,
-        model: ModelClient,
-        report: Report,
-        statusUpdate: suspend (String) -> Unit,
-        warn: (String) -> Unit,
-    ): ExecutionResult? {
-        statusUpdate("Checking your API key and model")
-        val who = who(config.provider())
-        val id = config.modelId()
-        val clear = if (config.provider() == Provider.Custom) "Pick another Model" else "Clear Model to use the recommended one"
-        val problem =
-            try {
-                when (model.check()) {
-                    Preflight.BadKey -> keyRejected(config.provider())
-                    Preflight.UnknownModel -> "${who.replaceFirstChar(Char::uppercase)} has no model called `$id`. $clear, or check the spelling."
-                    Preflight.NoTools -> "`$id` can't control the browser here. $clear."
-                    null -> null.also { checked = true }
-                }
-            } catch (e: ModelException) {
-                warn("pre-flight check failed: ${e.message}")
-                val headline = "Couldn't reach $who (${e.status?.let { "HTTP $it" } ?: "network error"}). Try again later."
-                if (config.runMode() == RunMode.Repeat && ++transientFailures < MAX_TRANSIENT_FAILURES) return retry(config, who, statusUpdate)
-                headline
-            }
-        return problem?.let { report.error(it, cost = COST_ZERO) }
     }
 
     /**
@@ -466,9 +403,6 @@ internal class AgentScript(
                 // The host throws for a required item with no value, and a throw from onStart reaches the user without its message.
                 goalError(runCatching { config.goal() }.getOrNull()),
                 startUrlError(runCatching { config.startUrl() }.getOrNull()),
-                apiKeyError(config.provider(), config.apiKey()?.reveal()),
-                modelError(config.provider(), config.model()),
-                serverUrlError(config.provider(), config.baseUrl()),
                 positiveError("Max steps per run", config.maxSteps()),
                 positiveError("Max \$ per run", config.maxRunCost()),
                 positiveError("Max \$ per task", config.maxTaskCost()),
@@ -519,25 +453,6 @@ internal class AgentScript(
     }
 }
 
-/** A preset's own server (a leftover Server URL is ignored: the key must not go elsewhere); Custom's Server URL. */
-internal fun modelClient(config: AgentConfiguration): ModelClient {
-    val provider = config.provider()
-    val baseUrl = provider.baseUrl ?: config.baseUrl()!!.trim()
-    return when (provider) {
-        Provider.Anthropic -> AnthropicClient(baseUrl, config.apiKey()!!.reveal(), config.modelId())
-        else -> OpenAiCompatibleClient(baseUrl, config.apiKey()?.reveal(), config.modelId(), custom = provider == Provider.Custom)
-    }
-}
-
-private fun AgentConfiguration.modelId() = model()?.trim()?.ifEmpty { null } ?: provider().recommendedModel!!
-
-internal fun who(provider: Provider) = if (provider == Provider.Custom) "your server" else provider.name
-
-/** The run's and the Model dropdown's message for a 401/403. */
-internal fun keyRejected(provider: Provider): String {
-    val from = provider.keyUrl?.let { "from $it " }.orEmpty()
-    return "${who(provider).replaceFirstChar(Char::uppercase)} rejected your API key. Copy it again ${from}into API key."
-}
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
@@ -558,11 +473,11 @@ private const val COST_ZERO = "Cost: \$0"
 /** One side of a change's `old → new`: at most 100 characters. */
 private fun cut(s: String) = if (s.length > 100) s.take(99) + "…" else s
 
-/** A cost amount: `$0.21`, `$0`, `unknown (no price for x)` or `$0.12 + unknown`. */
-private fun spent(amount: Double, unpriced: Set<String?>) =
+/** A cost amount: `$0.21`, `$0`, `unknown` or `$0.12 + unknown`; never a model id. */
+private fun spent(amount: Double, unknown: Boolean) =
     when {
-        unpriced.isEmpty() -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
-        amount == 0.0 -> "unknown (no price for ${unpriced.map { it ?: "unknown model" }.joinToString()})"
+        !unknown -> usd(amount).takeUnless { it == "\$0.00" } ?: "\$0"
+        amount == 0.0 -> "unknown"
         else -> "${usd(amount)} + unknown"
     }
 

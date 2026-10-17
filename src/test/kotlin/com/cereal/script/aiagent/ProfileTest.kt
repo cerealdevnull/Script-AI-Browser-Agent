@@ -1,5 +1,7 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
@@ -19,10 +21,10 @@ class ProfileTest {
 
     private fun config(goal: String) = TestConfig(goal = goal, startUrl = site.url("session.html"))
 
-    private fun run(host: Host, goal: String, vararg turns: suspend (ModelRequest) -> List<ToolCall>) =
-        runBlocking { host.run(AgentScript({ ScriptedModel(*turns) }, profiles), config(goal)) }
+    private fun run(host: Host, goal: String, vararg turns: suspend (LlmRequest) -> List<LlmToolCall>) =
+        runBlocking { host.run(AgentScript(profiles).also { host.llm.responder = (ScriptedModel(*turns))::respond }, config(goal)) }
 
-    private fun finish(): List<ToolCall> = listOf(call("finish", """{"goal_met": true, "summary": "ok"}"""))
+    private fun finish(): List<LlmToolCall> = listOf(call("finish", """{"goal_met": true, "summary": "ok"}"""))
 
     @Test
     fun `a reworded goal keeps the sign-in, a new task with the same settings starts signed out`() {
@@ -51,7 +53,7 @@ class ProfileTest {
     @Test
     fun `Forget learned steps and sign out makes the next start sign in from scratch`() {
         val task = Host()
-        val signIn: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
+        val signIn: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
         assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
 
         val result = runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps and sign out", config("Sign in")) }
@@ -65,7 +67,7 @@ class ProfileTest {
     @Test
     fun `Forget learned steps keeps the sign-in`() {
         val task = Host()
-        val signIn: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
+        val signIn: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
         assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
 
         assertEquals("Forgot learned steps", runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps", config("Sign in")) })

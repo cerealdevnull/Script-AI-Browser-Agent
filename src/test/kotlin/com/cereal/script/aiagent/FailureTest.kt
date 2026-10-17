@@ -1,8 +1,14 @@
 package com.cereal.script.aiagent
 
+import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmToolCall
+import com.cereal.sdk.component.llm.LlmException
+import com.cereal.sdk.component.llm.LlmResponse
+import com.cereal.sdk.component.llm.StopReason
 import com.cereal.sdk.ExecutionResult
 import kotlinx.coroutines.runBlocking
 import kotlin.test.AfterTest
+import kotlin.time.Duration.Companion.seconds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -16,50 +22,61 @@ class FailureTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(model: ModelClient, startUrl: String = site.url(), pageLoadTimeoutMs: Long = 60_000) =
-        runBlocking { host.run(AgentScript({ model }, tempProfiles(), pageLoadTimeoutMs), TestConfig(startUrl = startUrl)) }
+    private fun run(respond: suspend (LlmRequest) -> LlmResponse, startUrl: String = site.url(), pageLoadTimeoutMs: Long = 60_000) =
+        runBlocking { host.run(AgentScript(tempProfiles(), pageLoadTimeoutMs).also { host.llm.responder = respond }, TestConfig(startUrl = startUrl)) }
 
-    private fun failingModel(e: ModelException) =
-        object : ModelClient {
-            override suspend fun send(request: ModelRequest): ModelTurn = throw e
-        }
+    private fun failingModel(e: LlmException): suspend (LlmRequest) -> LlmResponse = { throw e }
 
-    @Test
-    fun `a key revoked mid-run gets the pre-flight key wording, the HTTP body only in the log`() {
-        val result = run(failingModel(ModelException("Model/API key rejected: HTTP 401: invalid x-api-key", status = 401)))
-
-        val key = "Anthropic rejected your API key. Copy it again from https://console.anthropic.com/settings/keys into API key."
-        assertIs<ExecutionResult.Error>(result)
-        assertEquals(key, result.message)
-        assertEquals("$key\nCost: \$0", host.notifications.single().message)
-        assertTrue(host.logs.any { "invalid x-api-key" in it })
+    /** One model failure in a Once run: the Error's message, then the notification's headline, action and cost lines. */
+    private fun failure(e: LlmException): Pair<String, String> {
+        val result = assertIs<ExecutionResult.Error>(run(failingModel(e)))
+        return result.message to host.notifications.single().message
     }
 
     @Test
-    fun `a model 4xx ends the run with Error, the provider's short message and a start-again action`() {
-        val result = run(failingModel(ModelException("Model error: HTTP 400: prompt is too long")))
+    fun `no AI provider set up ends the run with the client's message and no action`() {
+        val (headline, message) = failure(LlmException.NotConfigured())
 
-        assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic returned an error: HTTP 400: prompt is too long.", result.message)
-        assertEquals("Anthropic returned an error: HTTP 400: prompt is too long.\nStart the task again.\nCost: \$0", host.notifications.single().message)
+        assertEquals("No AI provider is set up. Choose one in Settings → AI.", headline)
+        assertEquals("$headline\nCost: \$0", message)
     }
 
     @Test
-    fun `a transient model failure in a Once run says the provider couldn't be reached`() {
-        val result = run(failingModel(ModelException("Model error: network error: connection reset", transient = true)))
+    fun `a rejected key ends the run with the client's message and no action`() {
+        val key = "The AI provider rejected the API key. Check it in Settings → AI."
 
-        assertEquals("Couldn't reach Anthropic (network error).\nTry again later.\nCost: \$0", host.notifications.single().message)
-        assertIs<ExecutionResult.Error>(result)
+        assertEquals(key to "$key\nCost: \$0", failure(LlmException.Authentication(key)))
+    }
+
+    @Test
+    fun `a rejected request names the AI provider, quotes its text and says start again`() {
+        val headline = "The AI provider returned an error: prompt is too long."
+
+        assertEquals(headline to "$headline\nStart the task again.\nCost: \$0", failure(LlmException.InvalidRequest("prompt is too long")))
+    }
+
+    @Test
+    fun `a rate limit in a Once run fails at once with the client's message and no action`() {
+        val busy = "The AI provider is busy. Try again in a minute."
+
+        assertEquals(busy to "$busy\nCost: \$0", failure(LlmException.RateLimited(30.seconds, busy)))
+    }
+
+    @Test
+    fun `an unavailable provider in a Once run fails at once with the client's message and no action`() {
+        val down = "Couldn't reach the AI provider. Check your connection."
+
+        assertEquals(down to "$down\nCost: \$0", failure(LlmException.Unavailable(down)))
+    }
+
+    @Test
+    fun `an unavailable provider without a message says it couldn't reach the AI provider`() {
+        assertEquals("Couldn't reach the AI provider.", failure(LlmException.Unavailable()).first)
     }
 
     @Test
     fun `a model that stops without a tool call ends with a start-again action`() {
-        val model =
-            object : ModelClient {
-                override suspend fun send(request: ModelRequest) = ModelTurn(emptyList(), "end_turn", ScriptedModel.MODEL, Usage(1000, 100), raw = null, text = "Done?")
-            }
-
-        run(model)
+        run({ response(text = "Done?") })
 
         assertEquals("The model stopped without an answer.\nStart the task again.\nCost: \$0.01", host.notifications.single().message)
     }
@@ -68,7 +85,7 @@ class FailureTest {
     fun `a Chrome that won't start asks to check the Chrome install`() {
         // A profile path under a file isn't enough: Chrome on Linux falls back to a temporary profile and starts anyway.
         val model = ScriptedModel()
-        val script = AgentScript({ model }, launchBrowser = { _, _ -> throw java.io.IOException("no chrome") })
+        val script = AgentScript(launchBrowser = { _, _ -> throw java.io.IOException("no chrome") }).also { host.llm.responder = model::respond }
 
         val result = runBlocking { host.run(script, TestConfig(startUrl = site.url())) }
 
@@ -81,7 +98,7 @@ class FailureTest {
 
     @Test
     fun `an unexpected error inside the script asks to send the task log`() {
-        val result = run(object : ModelClient { override suspend fun send(request: ModelRequest): ModelTurn = error("boom") })
+        val result = run({ error("boom") })
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals(
@@ -91,29 +108,23 @@ class FailureTest {
     }
 
     @Test
-    fun `a refusal names the provider and says retrying won't help`() {
-        val model =
-            object : ModelClient {
-                override suspend fun send(request: ModelRequest) =
-                    ModelTurn(emptyList(), "refusal", ScriptedModel.MODEL, Usage(1000, 100), raw = null, text = "I can't help with that.")
-            }
-
-        val result = run(model)
+    fun `a refusal says the model declined, without naming a provider, and that retrying won't help`() {
+        val result = run({ response(text = "I can't help with that.", stopReason = StopReason.Refusal) })
 
         assertIs<ExecutionResult.Error>(result)
-        assertEquals("Anthropic's model declined this goal: I can't help with that.", result.message)
+        assertEquals("The model declined this goal: I can't help with that.", result.message)
         assertEquals(
-            "Anthropic's model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
+            "The model declined this goal: I can't help with that.\nChange the goal. Retrying won't help.\nCost: \$0.01",
             host.notifications.single().message,
         )
     }
 
     @Test
     fun `repeating the same action gets a nudge after 3, and ends as stuck after 3 more`() {
-        val addToCart: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Add to cart")}}""")) }
+        val addToCart: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Add to cart")}}""")) }
         val model = ScriptedModel(*Array(7) { addToCart })
 
-        val result = run(model, startUrl = site.url("product.html"))
+        val result = run(model::respond, startUrl = site.url("product.html"))
 
         val nudge = "you are repeating the same action"
         assertTrue(nudge !in model.requests[2].lastText, "no nudge after 2 repeats")
@@ -127,9 +138,9 @@ class FailureTest {
 
     @Test
     fun `stuck on a sign-in page points at Forget learned steps and sign out`() {
-        val login: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Login")}}""")) }
+        val login: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Login")}}""")) }
 
-        run(ScriptedModel(*Array(7) { login }), startUrl = site.url("login.html"))
+        run(ScriptedModel(*Array(7) { login })::respond, startUrl = site.url("login.html"))
 
         assertEquals(
             "The agent got stuck repeating the same action on ${site.url("login.html")}.\n" +
@@ -140,12 +151,12 @@ class FailureTest {
 
     @Test
     fun `a page that never loads is a tool error first, then an Error when it repeats`() {
-        val navigate: suspend (ModelRequest) -> List<ToolCall> = { listOf(call("navigate", """{"url": "${site.url("never-loads.html")}"}""")) }
+        val navigate: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("navigate", """{"url": "${site.url("never-loads.html")}"}""")) }
         val model =
             ScriptedModel(
                 navigate,
                 {
-                    val result = (it.messages.last() as Message.ToolResults).results.single()
+                    val result = it.lastResults.single()
                     assertTrue(result.isError)
                     assertTrue("did not finish loading" in result.text, result.text)
                     navigate(it)
@@ -153,7 +164,7 @@ class FailureTest {
                 navigate,
             )
 
-        val result = run(model, pageLoadTimeoutMs = 1_500)
+        val result = run(model::respond, pageLoadTimeoutMs = 1_500)
 
         assertIs<ExecutionResult.Error>(result)
         assertEquals("Couldn't load ${site.url("never-loads.html")} (timed out).", result.message)
@@ -165,7 +176,7 @@ class FailureTest {
     fun `a Start URL that won't load ends the first run before step 1, at no cost`() {
         val model = ScriptedModel()
 
-        val result = run(model, startUrl = "https://practicesoftwaretestin.invalid")
+        val result = run(model::respond, startUrl = "https://practicesoftwaretestin.invalid")
 
         val message = "Couldn't open https://practicesoftwaretestin.invalid (site not found). Check the Start URL."
         assertIs<ExecutionResult.Error>(result)

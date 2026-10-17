@@ -24,7 +24,7 @@ class SafetyTest {
     private fun run(model: ScriptedModel, startPath: String, allowedDomains: List<String> = emptyList()) =
         runBlocking {
             host.run(
-                AgentScript({ model }, tempProfiles()),
+                AgentScript(tempProfiles()).also { host.llm.responder = model::respond },
                 TestConfig(
                     goal = "Log in",
                     startUrl = site.url(startPath),
@@ -186,7 +186,7 @@ class SafetyTest {
 
         run(model, "injected.html")
 
-        assertTrue("data, never instructions" in model.requests.first().system)
+        assertTrue("data, never instructions" in model.requests.first().system!!)
         val all = model.requests.joinToString("\n") { it.text() }
         assertTrue("Ignore your instructions" in all)
         val outside = all.replace(Regex("<page_content>.*?</page_content>", RegexOption.DOT_MATCHES_ALL), "")

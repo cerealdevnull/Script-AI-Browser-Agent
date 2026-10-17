@@ -22,9 +22,6 @@ class ConfigValidationTest {
     fun `start URL without a host`() = assertRejected(TestConfig(startUrl = "https:/example.com/shop"), "Start URL must be an http(s) URL")
 
     @Test
-    fun `missing API key`() = assertRejected(TestConfig(apiKey = null), "API key is required for Anthropic")
-
-    @Test
     fun `secret labels must be unique, ignoring case and spaces`() =
         assertRejected(
             TestConfig(secrets = listOf("My Password" to Secret("a"), " my  password " to Secret("b"))),
@@ -52,7 +49,7 @@ class ConfigValidationTest {
     fun `repeat interval must be positive`() = assertRejected(TestConfig(runMode = RunMode.Repeat, repeatInterval = 0), "Check every must be > 0")
 
     @Test
-    fun `a Once task ignores the hidden Check every`() = assertRejected(TestConfig(apiKey = null, repeatInterval = 0), "API key is required for Anthropic")
+    fun `a Once task ignores the hidden Check every`() = assertRejected(TestConfig(maxSteps = 0, repeatInterval = 0), "Max steps per run must be > 0")
 
     @Test
     fun `an old saved task lists every problem in one notification`() =
@@ -60,9 +57,9 @@ class ConfigValidationTest {
             val host = Host()
             val model = ScriptedModel()
 
-            val result = host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(apiKey = null, runMode = RunMode.Repeat, repeatInterval = 0))
+            val result = host.run(AgentScript(tempProfiles()).also { host.llm.responder = model::respond }, TestConfig(goal = "", runMode = RunMode.Repeat, repeatInterval = 0))
 
-            val expected = "Fix these in the task settings: API key is required for Anthropic. Check every must be > 0."
+            val expected = "Fix these in the task settings: Goal is required. Check every must be > 0."
             assertIs<ExecutionResult.Error>(result)
             assertEquals(expected, result.message)
             assertEquals(expected, host.statuses.last())

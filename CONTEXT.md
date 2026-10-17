@@ -7,7 +7,6 @@
 - **question goal**: a goal that asks for an answer ("tell me whether …"); suits Once. In Repeat it is read as the condition its worth-notifying answer states.
 - **condition goal**: a goal that states something that can become true ("notify me when … is in stock"); suits Repeat, which learns it as a Check.
 - **check** (lowercase, user-facing): one repeat run as the user sees it ("checked 14:32", "42 checks"). _Avoid_ calling the **Check** condition a "Check" in user text; describe it in words.
-- **escalation**: a goal run on the cheaper first-try model that failed or hit the step cap, restarted as a fresh goal run on the main model.
 - **step**: one LLM call. Replayed actions are not steps.
 - **current tab**: the tab the agent sees and acts in; it moves to a tab the agent's own action opened and back to the opener when that tab closes.
 - **frame**: an in-process iframe (on the page's own site, one level deep) whose content is part of the snapshot and of replay; any other iframe shows only as a labelled placeholder.
@@ -39,6 +38,4 @@
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
 - **run cap** / **task cap**: the step and dollar limits per goal run / per task.
 - **task total**: the dollars all goal runs of a task have cost since the task last started; counted against the task cap.
-- **provider**: who runs the model the agent calls: a named preset (Anthropic, Google Gemini, OpenAI, OpenRouter) or Custom (any OpenAI-compatible server).
-- **recommended model**: the model a preset uses when the user leaves Model empty; Custom has none.
-- **pre-flight check**: the free lookup of the key and model at the provider, once per task start, before Chrome opens.
+- **AI provider**: whoever runs the model the agent calls, which the user picks with the model in the client's Settings → AI; the script never knows which one it is.

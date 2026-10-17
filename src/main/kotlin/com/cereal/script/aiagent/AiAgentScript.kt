@@ -104,7 +104,7 @@ internal class AgentScript(
     ): ExecutionResult {
         val report = Report(configuration, provider, statusUpdate)
         configError?.let { return report.error(it, cost = COST_ZERO) }
-        val scrubber = scrubber ?: Scrubber(configuration.apiKey()?.reveal()).also { scrubber = it }
+        val scrubber = scrubber ?: Scrubber().also { scrubber = it }
         val log = provider.logger()
         val browser =
             browser?.takeIf { it.alive } ?: try {
@@ -403,9 +403,6 @@ internal class AgentScript(
                 // The host throws for a required item with no value, and a throw from onStart reaches the user without its message.
                 goalError(runCatching { config.goal() }.getOrNull()),
                 startUrlError(runCatching { config.startUrl() }.getOrNull()),
-                apiKeyError(config.provider(), config.apiKey()?.reveal()),
-                modelError(config.provider(), config.model()),
-                serverUrlError(config.provider(), config.baseUrl()),
                 positiveError("Max steps per run", config.maxSteps()),
                 positiveError("Max \$ per run", config.maxRunCost()),
                 positiveError("Max \$ per task", config.maxTaskCost()),

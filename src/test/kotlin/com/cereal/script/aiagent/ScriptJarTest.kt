@@ -46,41 +46,25 @@ class ScriptJarTest {
 
         // The host builds the config form with kotlin-reflect: Kotlin metadata must survive shrinking.
         val functions = configClass.kotlin.memberFunctions.associateBy { it.name }
-        assertTrue(functions.getValue("baseUrl").returnType.isMarkedNullable)
         assertFalse(functions.getValue("goal").returnType.isMarkedNullable)
         assertTrue(functions.getValue("secrets").returnType.isMarkedNullable)
         assertTrue(functions.getValue("allowedDomains").returnType.isMarkedNullable)
-        assertFalse("onNextStart" in functions)
+        listOf("onNextStart", "provider", "apiKey", "model", "baseUrl").forEach { assertFalse(it in functions, it) }
         val row = loader.loadClass("${configClass.name}\$AllowedDomain").kotlin.memberFunctions.single { it.name == "domain" }
         assertFalse(row.returnType.isMarkedNullable)
         val secretRow = loader.loadClass("${configClass.name}\$NamedSecret").kotlin.memberFunctions.associateBy { it.name }
         assertEquals(Secret::class, secretRow.getValue("value").returnType.classifier)
         assertFalse(secretRow.getValue("label").returnType.isMarkedNullable)
-        // The host gets the Model dropdown's source as the annotation's objectInstance.
-        val model = configClass.getMethod("model").getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)
-        val options = model.options.objectInstance ?: error("ModelOptions is no Kotlin object in the jar")
-        assertEquals(setOf("provider", "apiKey", "baseUrl"), options.dependsOn)
-        val empty =
-            object : com.cereal.sdk.statemodifier.ScriptConfig {
-                override fun valueForKey(key: String) = com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
-            }
-        assertEquals(emptyList(), runBlocking { options.load(empty) })
-
         FixtureServer().use { site ->
             run {
                 val product = javaClass.getResource("/fixtures/product.html")!!.readText()
                 site.pages["product.html"] = product.replace("In stock", "Out of stock")
                 val repeat = loader.loadClass("${scriptClass.packageName}.RunMode").enumConstants.single { it.toString() == "Repeat" }
-                val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" }
                 val values =
                     mapOf(
                         "goal" to "Tell me when Long Nose Pliers is in stock",
                         "startUrl" to site.url(),
                         "runMode" to repeat,
-                        "provider" to custom,
-                        "baseUrl" to "http://localhost:1/v1",
-                        "model" to "llama3",
-                        "apiKey" to Secret("test-key"),
                     )
                 // Like the host's config proxy: stored values, or the interface default.
                 val config =
@@ -136,23 +120,18 @@ class ScriptJarTest {
         val items =
             (listOf(configClass) + configClass.declaredClasses).flatMap { it.methods.toList() }
                 .mapNotNull { m -> m.getAnnotation(com.cereal.sdk.ScriptConfigurationItem::class.java)?.let { m.name to it } }
-        assertEquals(16, items.size, items.map { it.first }.toString())
+        assertEquals(12, items.size, items.map { it.first }.toString())
         val modifiers =
             items.associate { (name, item) ->
                 assertNotNull(item.options.objectInstance, "$name: ${item.options} is no Kotlin object in the jar")
                 name to (item.stateModifier.objectInstance ?: error("$name: ${item.stateModifier} is no Kotlin object in the jar"))
             }
 
-        val custom = loader.loadClass("${scriptClass.packageName}.Provider").enumConstants.single { it.toString() == "Custom" } as Enum<*>
         fun config(vararg values: Pair<String, com.cereal.sdk.statemodifier.ScriptConfigValue>) =
             object : com.cereal.sdk.statemodifier.ScriptConfig {
                 override fun valueForKey(key: String) =
                     values.toMap()[key] ?: com.cereal.sdk.statemodifier.ScriptConfigValue.NullScriptConfigValue
             }
-        val customProvider = "provider" to com.cereal.sdk.statemodifier.ScriptConfigValue.EnumScriptConfigValue(custom)
-        assertEquals("Model is required for Custom", modifiers.getValue("model").getError(config(customProvider)))
-        assertEquals("claude-sonnet-5-5", modifiers.getValue("model").getPlaceholder(config()))
-        assertEquals("http://localhost:11434/v1", modifiers.getValue("baseUrl").getPlaceholder(config(customProvider)))
         val ftp = "startUrl" to com.cereal.sdk.statemodifier.ScriptConfigValue.StringScriptConfigValue("ftp://example.com")
         assertEquals("Start URL must be an http(s) URL", modifiers.getValue("startUrl").getError(config(ftp)))
         assertEquals("Goal is required", modifiers.getValue("goal").getError(config()))

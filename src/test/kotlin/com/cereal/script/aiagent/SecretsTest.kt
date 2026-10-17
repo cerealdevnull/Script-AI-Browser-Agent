@@ -27,7 +27,6 @@ class SecretsTest {
                 TestConfig(
                     goal = "Log in",
                     startUrl = site.url("login.html"),
-                    apiKey = Secret(API_KEY),
                     secrets = listOf("email" to Secret(EMAIL), "password" to Secret(PASSWORD)),
                 ),
             )
@@ -58,7 +57,7 @@ class SecretsTest {
         // Everything that went through provider.llm(), as the client received it.
         val outbound = host.llm.requests.joinToString("\n") { it.toString() }
         assertEquals(4, host.llm.requests.size)
-        for (value in listOf(EMAIL, PASSWORD, API_KEY)) {
+        for (value in listOf(EMAIL, PASSWORD)) {
             assertFalse(value in outbound, "model requests contain $value")
             assertFalse(host.logs.any { value in it }, "logs contain $value")
         }
@@ -239,23 +238,22 @@ class SecretsTest {
     }
 
     @Test
-    fun `an error carrying the API key or a revealed secret is logged scrubbed`() {
+    fun `an error carrying a revealed secret is logged scrubbed`() {
         val model =
             ScriptedModel(
                 { listOf(call("type_secret", """{"ref": ${it.ref("textbox", "Email address")}, "field": "email"}""")) },
-                { error("upstream echoed $API_KEY and $EMAIL") },
+                { error("upstream echoed $EMAIL") },
             )
 
         val result = run(model)
 
         assertIs<ExecutionResult.Error>(result)
-        assertTrue(host.logs.any { "upstream echoed {{api_key}} and {{secret:email}}" in it }, host.logs.joinToString("\n"))
-        assertFalse(host.logs.any { API_KEY in it || EMAIL in it })
+        assertTrue(host.logs.any { "upstream echoed {{secret:email}}" in it }, host.logs.joinToString("\n"))
+        assertFalse(host.logs.any { EMAIL in it })
     }
 
     private companion object {
         const val EMAIL = "customer@practicesoftwaretesting.com"
         const val PASSWORD = "welcome01"
-        const val API_KEY = "sk-ant-test-key-123"
     }
 }

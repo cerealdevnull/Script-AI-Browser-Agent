@@ -23,7 +23,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -197,9 +196,14 @@ class Agent(
             capReached()?.let { return it }
             status("${progress(steps + 1)} · Thinking…")
             // The client's retries and rate-limit waits happen inside complete(): they are not steps.
+            // A turn the client rejected for bad tool arguments is still a turn: its calls go through validate() below.
+            var rejected: LlmException.InvalidOutput? = null
             val response =
                 try {
                     llm.complete(LlmRequest(SYSTEM_PROMPT, turns.toList(), LLM_TOOLS))
+                } catch (e: LlmException.InvalidOutput) {
+                    rejected = e
+                    null
                 } catch (e: LlmException) {
                     warn("step ${steps + 1}: the model call failed: ${e::class.simpleName}: ${e.message}")
                     // The client's message is the headline, except a rejected request, whose message is the provider's own text.
@@ -212,26 +216,31 @@ class Agent(
                     }
                 }
             steps++
-            turns += response.assistantTurn
-            val u = Usage(response.usage.inputUncached.toLong(), response.usage.output.toLong(), response.usage.cacheRead.toLong(), response.usage.cacheWrite.toLong())
+            val turn = response?.assistantTurn ?: rejected!!.assistantTurn
+            turns += turn
+            val u = response?.usage?.let { Usage(it.inputUncached.toLong(), it.output.toLong(), it.cacheRead.toLong(), it.cacheWrite.toLong()) }
             val stepCost =
-                Prices.cost(response.model, u) ?: 0.0.also {
-                    if (unpriced.add(response.model)) warn("no price known for model ${response.model}: counted as \$0, only the step cap applies")
+                if (response == null) {
+                    unpriced += REJECTED_TURN
+                    warn("step $steps: the client rejected the model's tool arguments (${rejected!!.message}): counted as \$0, checking each call")
+                    0.0
+                } else {
+                    Prices.cost(response.model, u!!) ?: 0.0.also {
+                        if (unpriced.add(response.model)) warn("no price known for model ${response.model}: counted as \$0, only the step cap applies")
+                    }
                 }
             cost += stepCost
-            val calls = response.toolCalls.map { ToolCall(it.id, it.name, runCatching { Json.parseToJsonElement(it.argumentsJson) as JsonObject }.getOrElse { JsonObject(emptyMap()) }) }
+            val calls = turn.toolCalls.map { ToolCall(it.id, it.name, runCatching { Json.parseToJsonElement(it.argumentsJson) as JsonObject }.getOrElse { JsonObject(emptyMap()) }) }
             val actions = calls.map { describe(it) }
-            response.text.takeIf { it.isNotBlank() }?.let { log("step $steps, model says: ${it.trim()}") }
-            log(
-                "step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} " +
-                    "(${u.input} in / ${u.output} out / ${u.cacheRead} cache-read tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})",
-            )
-            if (response.stopReason == StopReason.Refusal) {
+            turn.text.takeIf { it.isNotBlank() }?.let { log("step $steps, model says: ${it.trim()}") }
+            val tokens = u?.let { "${it.input} in / ${it.output} out / ${it.cacheRead} cache-read tokens" } ?: "tokens unknown"
+            log("step $steps: ${actions.joinToString().ifEmpty { "no tool call" }} ($tokens, step ${usd(stepCost, 4)}, run total ${usd(cost, 4)})")
+            if (response?.stopReason == StopReason.Refusal) {
                 val why = sentence(response.text.takeIf { it.isNotBlank() } ?: "no reason given")
                 return Outcome.Failed("The model declined this goal: $why", steps, "Change the goal. Retrying won't help.")
             }
             if (calls.isEmpty()) {
-                warn("step $steps: the model stopped without calling finish (stop reason: ${response.stopReason})")
+                warn("step $steps: the model stopped without calling finish (stop reason: ${response?.stopReason ?: "rejected output"})")
                 return Outcome.Failed("The model stopped without an answer.", steps, "Start the task again.")
             }
 
@@ -874,16 +883,21 @@ class Agent(
                 ToolDef("fail", "Give up: the goal cannot be achieved. reason: why, for the user.", schema("reason" to "string")),
             )
 
+        /** Stands in for a model name in [unpricedModels]: a rejected turn has no usage, so its cost is unknown. */
+        const val REJECTED_TURN = "a rejected turn"
+
         private val LLM_TOOLS = TOOLS.map { LlmTool(it.name, it.description, it.schema.toString()) }
 
-        /** Strict-mode schema: every property required, nothing else allowed. A property is a type name or a schema. */
+        private fun JsonObject.isNullable() = (get("type") as? JsonArray)?.contains(JsonPrimitive("null")) == true
+
+        /** Every non-nullable property required, nothing else allowed. A property is a type name or a schema. */
         private fun schema(vararg props: Pair<String, Any>) =
             buildJsonObject {
                 put("type", "object")
                 putJsonObject("properties") {
                     props.forEach { (name, type) -> put(name, type as? JsonObject ?: buildJsonObject { put("type", type as String) }) }
                 }
-                putJsonArray("required") { props.forEach { add(JsonPrimitive(it.first)) } }
+                putJsonArray("required") { props.filterNot { (it.second as? JsonObject)?.isNullable() == true }.forEach { add(JsonPrimitive(it.first)) } }
                 put("additionalProperties", false)
             }
 
@@ -916,8 +930,8 @@ class Agent(
                 val props = schema["properties"]!!.jsonObject
                 val prefix = if (path.isEmpty()) "" else "$path."
                 value.keys.firstOrNull { it !in props }?.let { return "unexpected argument '$prefix$it'" }
-                for (name in schema["required"]!!.jsonArray.map { it.jsonPrimitive.content }) {
-                    // A missing nullable argument counts as null (not every provider enforces strict schemas).
+                for (name in props.keys) {
+                    // A missing nullable argument counts as null.
                     check(props[name]!!.jsonObject, value[name] ?: JsonNull, "$prefix$name")
                         ?.let { return if (value[name] == null) "missing argument '$prefix$name'" else it }
                 }

@@ -2,6 +2,7 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.component.llm.LlmRequest
+import com.cereal.sdk.component.llm.LlmResponse
 import com.cereal.sdk.component.llm.LlmToolCall
 import com.cereal.sdk.component.llm.LlmUsage
 import kotlinx.coroutines.runBlocking
@@ -19,10 +20,15 @@ class CapsTest {
     @AfterTest
     fun tearDown() = site.close()
 
-    private fun run(model: ScriptedModel, maxSteps: Int = 40, maxRunCost: Double = 3.0, maxTaskCost: Double = 10.0) =
-        runBlocking {
+    private fun run(
+        model: ScriptedModel,
+        maxSteps: Int = 40,
+        maxRunCost: Double = 3.0,
+        maxTaskCost: Double = 10.0,
+        respond: suspend (LlmRequest) -> LlmResponse = model::respond,
+    ) = runBlocking {
             val config = TestConfig(startUrl = site.url(), maxSteps = maxSteps, maxRunCost = maxRunCost, maxTaskCost = maxTaskCost)
-            host.llm.responder = model::respond
+            host.llm.responder = respond
             host.run(AgentScript(tempProfiles()), config)
         }
 
@@ -151,5 +157,17 @@ class CapsTest {
 
         assertEquals("Step 3 of 40 · \$0.12 + unknown · Thinking…", host.statuses.first { it.startsWith("Step 3") })
         assertEquals("In stock.\nCost: \$0.12 + unknown", host.notifications.single().message)
+    }
+
+    @Test
+    fun `a turn the client rejected counts as a step at $0 and marks the cost unknown`() {
+        val model = ScriptedModel(readForever, readForever, { listOf(call("finish", """{"goal_met": true, "summary": "In stock."}""")) })
+
+        run(model, respond = model.rejecting(1))
+
+        assertTrue(host.logs.any { it.startsWith("INFO step 1: ") && it.endsWith("(tokens unknown, step \$0.0000, run total \$0.0000)") }, host.logs.joinToString("\n"))
+        assertEquals(1, host.logs.count { it.startsWith("WARN step 1: ") && "rejected" in it }, host.logs.joinToString("\n"))
+        assertEquals("Step 3 of 40 · \$0.01 + unknown · Thinking…", host.statuses.first { it.startsWith("Step 3") })
+        assertEquals("In stock.\nCost: \$0.01 + unknown", host.notifications.single().message)
     }
 }

@@ -8,6 +8,7 @@ import com.cereal.sdk.component.llm.LlmTurn
 import com.cereal.sdk.component.llm.LlmUsage
 import com.cereal.sdk.component.llm.StopReason
 import com.cereal.sdk.component.llm.UserPart
+import com.cereal.test.components.invalidOutput
 
 /**
  * A fake model, the `responder` of the host's FakeLlmComponent: `host.llm.responder = model::respond`. Each turn is a
@@ -27,6 +28,10 @@ class ScriptedModel(
         val turn = turns.removeFirstOrNull() ?: error("ScriptedModel: no turn left for request ${requests.size}")
         return response(turn(request), model = models.getOrElse(requests.size - 1) { MODEL }, usage = usage)
     }
+
+    /** [respond], but the turns at these 1-based [steps] come back as the client's rejection: `InvalidOutput` carrying the turn. */
+    fun rejecting(vararg steps: Int): suspend (LlmRequest) -> LlmResponse =
+        { request -> respond(request).also { if (requests.size in steps) throw invalidOutput("{}", it.assistantTurn) } }
 
     companion object {
         const val MODEL = "claude-opus-5-5"

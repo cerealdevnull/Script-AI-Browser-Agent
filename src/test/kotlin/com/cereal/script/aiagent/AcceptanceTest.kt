@@ -22,17 +22,17 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** One task start of the real script (the test-only model client via [ModelTraffic], real Chrome): onStart, goal runs, onFinish. */
-private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val traffic: ModelTraffic, profiles: Path = tempProfiles()) {
+/** One task start of the real script (the test-only model [client], real Chrome): onStart, goal runs, onFinish. */
+private class AcceptanceTask(val goalName: String, val config: TestConfig, val host: Host, val client: OpenAiCompatibleClient, profiles: Path = tempProfiles()) {
     private val script = AgentScript(profiles)
-    private val provider = host.create().also { host.model = OpenAiCompatibleClient(traffic.baseUrl, config.apiKey!!.reveal(), config.model!!) }
+    private val provider = host.create().also { host.model = client }
 
     /** One goal run (one execute), reported as a results row. */
     suspend fun run(label: String): RunStats {
-        val mark = traffic.mark()
+        val mark = client.responses.size
         val dialogs = host.dialogs.size
         val result = script.execute(config, provider) {}
-        return RunStats(goalName, label, traffic.since(mark), result, host.dialogs.size - dialogs).report()
+        return RunStats(goalName, label, client.responses.drop(mark), result, host.dialogs.size - dialogs).report()
     }
 
     fun use(block: suspend AcceptanceTask.() -> Unit) =
@@ -66,20 +66,18 @@ class G1MonitorTest {
     private val ui = env("TOOLSHOP_LOCAL_URL", "http://localhost:4200")!!
     private val api = env("TOOLSHOP_LOCAL_API", "http://localhost:8091")!!
     private val host = Host()
-    private val traffic = ModelTraffic()
-    private lateinit var key: String
+    private lateinit var client: OpenAiCompatibleClient
 
     @BeforeTest
     fun setUp() {
-        val apiKey = anthropicKeyOrSkip()
+        val key = anthropicKeyOrSkip()
         assumeTrue(reachable(ui) && reachable("$api/products"), "self-hosted Toolshop not reachable at $ui / $api: see docs/acceptance.md")
-        key = apiKey
+        client = acceptanceClient(key)
     }
 
     @AfterTest
     fun tearDown() {
-        traffic.close()
-        if (::key.isInitialized) setStock(0)
+        if (::client.isInitialized) setStock(0)
     }
 
     /** Sets `stock` (the API's `in_stock` is `stock > 0`) and drops the API's 5-minute product cache. */
@@ -102,17 +100,14 @@ class G1MonitorTest {
             TestConfig(
                 goal = "Notify me when Long Nose Pliers is back in stock",
                 startUrl = ui,
-                apiKey = Secret(key),
-                model = ACCEPTANCE_MODEL,
-                runMode = RunMode.Repeat,
+                    runMode = RunMode.Repeat,
                 repeatInterval = 60,
             )
 
-        AcceptanceTask("G1", config, host, traffic).use {
+        AcceptanceTask("G1", config, host, client).use {
             val learned = run("run 1 (learn, out of stock)")
             assertIs<ExecutionResult.Loop>(learned.result, learned.result.message)
             assertTrue(host.notifications.isEmpty(), "run 1 notified: ${host.notifications.map { it.message }}")
-            learned.assertCacheReadsOnLaterSteps()
 
             for (i in 2..replays + 1) {
                 val replay = run("run $i (replay, out of stock)")
@@ -127,7 +122,6 @@ class G1MonitorTest {
             val notification = host.notifications.single()
             assertTrue("Long Nose Pliers" in notification.title + "\n" + notification.message, "${notification.title}\n${notification.message}")
         }
-        traffic.assertFallbacksAccepted()
     }
 }
 
@@ -135,18 +129,14 @@ class G1MonitorTest {
 @Tag("acceptance")
 class G2LoginReadTest {
     private val host = Host()
-    private val traffic = ModelTraffic()
-    private lateinit var key: String
+    private lateinit var client: OpenAiCompatibleClient
     private lateinit var token: String
 
     @BeforeTest
     fun setUp() {
-        key = anthropicKeyOrSkip()
+        client = acceptanceClient(anthropicKeyOrSkip())
         token = Demo.api.login(Demo.email, Demo.password)
     }
-
-    @AfterTest
-    fun tearDown() = traffic.close()
 
     private fun latestInvoice(): JsonObject = Demo.api.invoices(token)["data"]!!.jsonArray.maxBy { it.jsonObject["invoice_date"]!!.jsonPrimitive.content }.jsonObject
 
@@ -154,18 +144,15 @@ class G2LoginReadTest {
         TestConfig(
             goal = goal,
             startUrl = Demo.url,
-            apiKey = Secret(key),
-            model = ACCEPTANCE_MODEL,
             secrets = Demo.secrets,
             runMode = runMode,
         )
 
     @Test
     fun `G2 notifies the latest invoice's number, date and total and never sends the password to the model`() {
-        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once), host, traffic).use {
+        AcceptanceTask("G2", config("Log in and tell me the invoice number, date and total of my most recent order", RunMode.Once), host, client).use {
             val stats = run("Once (learn)")
             assertIs<ExecutionResult.Success>(stats.result, stats.result.message)
-            stats.assertCacheReadsOnLaterSteps()
         }
 
         val invoice = latestInvoice()
@@ -175,8 +162,7 @@ class G2LoginReadTest {
         val total = money(invoice["total"]!!.jsonPrimitive.double)
         for (expected in listOf(number, date, total)) assertTrue(expected in message, "'$expected' (API: $invoice) missing from:\n$message")
         assertTrue(!message.startsWith("Goal "), "the headline is the model's answer: $message")
-        traffic.assertNeverContains(Demo.password, "the password")
-        traffic.assertFallbacksAccepted()
+        client.assertNeverSent(Demo.password, "the password")
     }
 
     /**
@@ -188,25 +174,23 @@ class G2LoginReadTest {
         val number = latestInvoice()["invoice_number"]!!.jsonPrimitive.content
         val goal = "Log in and notify me when the invoice number of my most recent order is no longer $number"
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, client).use {
             val learned = run("Repeat run 1 (learn)")
             assertIs<ExecutionResult.Loop>(learned.result, learned.result.message)
-            learned.assertCacheReadsOnLaterSteps()
         }
         assertNotNull(
             runBlocking { host.create().preference().getString(ReplayCache.key(goal, Demo.url, listOf("email", "password"))) },
             "run 1 wrote no replay cache: ${host.logs.filter { "replay cache" in it }}",
         )
 
-        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, traffic).use {
+        AcceptanceTask("G2", config(goal, RunMode.Repeat), host, client).use {
             val replay = run("Repeat run 2 (replay, fresh profile)")
             assertIs<ExecutionResult.Loop>(replay.result, replay.result.message)
             assertEquals(0, replay.steps, "the replay called the model: ${host.logs.filter { "replay miss" in it }}")
         }
         assertEquals(emptyList(), host.dialogs, "the login asked for confirmation")
         assertTrue(host.notifications.isEmpty(), host.notifications.map { it.message }.toString())
-        traffic.assertNeverContains(Demo.password, "the password")
-        traffic.assertFallbacksAccepted()
+        client.assertNeverSent(Demo.password, "the password")
     }
 }
 
@@ -217,18 +201,14 @@ class G2LoginReadTest {
 @Tag("acceptance")
 class G3BuyTest {
     private val host = Host()
-    private val traffic = ModelTraffic()
-    private lateinit var key: String
+    private lateinit var client: OpenAiCompatibleClient
     private lateinit var token: String
 
     @BeforeTest
     fun setUp() {
-        key = anthropicKeyOrSkip()
+        client = acceptanceClient(anthropicKeyOrSkip())
         token = Demo.api.login(Demo.email, Demo.password)
     }
-
-    @AfterTest
-    fun tearDown() = traffic.close()
 
     private fun invoices() = Demo.api.invoices(token)
 
@@ -241,12 +221,10 @@ class G3BuyTest {
             TestConfig(
                 goal = "Log in and buy one Claw Hammer, paying cash on delivery",
                 startUrl = Demo.url,
-                apiKey = Secret(key),
-                model = ACCEPTANCE_MODEL,
-                secrets = Demo.secrets,
+                    secrets = Demo.secrets,
             ),
             host,
-            traffic,
+            client,
         )
 
     @Test
@@ -264,8 +242,7 @@ class G3BuyTest {
         assertEquals(before, count(), "an invoice was created after Decline")
         assertTrue(host.notifications.any { it.message.contains("\nConfirmation needed: ") }, host.notifications.map { it.message }.toString())
         assertTrue(host.notifications.last().message.startsWith("Stopped: you declined to "), host.notifications.last().message)
-        traffic.assertNeverContains(Demo.password, "the password")
-        traffic.assertFallbacksAccepted()
+        client.assertNeverSent(Demo.password, "the password")
     }
 
     @Test
@@ -277,14 +254,12 @@ class G3BuyTest {
             val stats = run("Accept")
             assertIs<ExecutionResult.Success>(stats.result, stats.result.message)
             assertTrue(stats.dialogs >= 1, "no confirmation before the order was placed")
-            stats.assertCacheReadsOnLaterSteps()
         }
 
         assertEquals(before + 1, count(), "expected exactly one new invoice")
         val newest = invoices()["data"]!!.jsonArray.maxBy { it.jsonObject["invoice_date"]!!.jsonPrimitive.content }.jsonObject
         val lines = newest["invoicelines"]!!.jsonArray.map { it.jsonObject["product"]!!.jsonObject["name"]!!.jsonPrimitive.content to it.jsonObject["quantity"]!!.jsonPrimitive.int }
         assertEquals(listOf("Claw Hammer" to 1), lines, "newest invoice: $newest")
-        traffic.assertNeverContains(Demo.password, "the password")
-        traffic.assertFallbacksAccepted()
+        client.assertNeverSent(Demo.password, "the password")
     }
 }

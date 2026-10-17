@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 /**
  * Manual smoke check (docs/acceptance.md): the real script on real sites, to find what breaks outside Toolshop.
- * Runs on gemini-3.8-flash through the test-only model client (via the traffic proxy); skips without GEMINI_API_KEY.
+ * Runs on gemini-3.8-flash through the test-only model client; skips without GEMINI_API_KEY.
  * Not pass/fail: every site's log and model traffic land in build/smoke/<id>/ to be judged afterwards.
  * Read-only goals, and any confirmation is declined. Rerun a subset with SMOKE_ONLY=nike,ad.
  */
@@ -41,34 +41,28 @@ class SmokeTest {
         val chosen = env("SMOKE_FILE")?.let { listOf(FieldTest.read(File(it)).site()) } ?: sites.filter { only == null || it.id in only }
         for (site in chosen) {
             val host = Host().apply { repeat(5) { dialogAnswers += declineClicked } }
-            ModelTraffic(GEMINI).use { traffic ->
-                host.model = OpenAiCompatibleClient(traffic.baseUrl, key, MODEL)
-                val config =
-                    TestConfig(
-                        goal = site.goal, startUrl = site.url, provider = Provider.Custom, apiKey = Secret(key),
-                        baseUrl = traffic.baseUrl, model = MODEL, runMode = site.mode,
-                        secrets = site.secrets,
-                    )
-                val script = AgentScript(profilesDir = tempProfiles())
-                val provider = host.create()
-                // ponytail: a crashed site is recorded in its log and the next site still runs.
-                runCatching {
-                    runBlocking {
-                        check(script.onStart(config, provider)) { "onStart rejected the config" }
-                        try {
-                            repeat(site.runs) { script.execute(config, provider) {} }
-                        } finally {
-                            script.onFinish(config, provider)
-                        }
+            val client = OpenAiCompatibleClient(GEMINI, key, MODEL)
+            host.model = client
+            val config = TestConfig(goal = site.goal, startUrl = site.url, runMode = site.mode, secrets = site.secrets)
+            val script = AgentScript(profilesDir = tempProfiles())
+            val provider = host.create()
+            // ponytail: a crashed site is recorded in its log and the next site still runs.
+            runCatching {
+                runBlocking {
+                    check(script.onStart(config, provider)) { "onStart rejected the config" }
+                    try {
+                        repeat(site.runs) { script.execute(config, provider) {} }
+                    } finally {
+                        script.onFinish(config, provider)
                     }
-                }.onFailure { synchronized(host.logs) { host.logs += "SMOKE crashed: $it" } }
-                val dir = File("build/smoke/${site.id}").apply { mkdirs() }
-                File(dir, "log.txt").writeText(synchronized(host.logs) { host.logs.joinToString("\n") })
-                File(dir, "notifications.txt").writeText(host.notifications.joinToString("\n---\n") { "${it.title}\n${it.message}" })
-                File(dir, "traffic.json").writeText(
-                    buildJsonArray { traffic.exchanges.forEach { addJsonObject { put("code", it.code); put("request", it.request); put("response", it.response) } } }.toString(),
-                )
-            }
+                }
+            }.onFailure { synchronized(host.logs) { host.logs += "SMOKE crashed: $it" } }
+            val dir = File("build/smoke/${site.id}").apply { mkdirs() }
+            File(dir, "log.txt").writeText(synchronized(host.logs) { host.logs.joinToString("\n") })
+            File(dir, "notifications.txt").writeText(host.notifications.joinToString("\n---\n") { "${it.title}\n${it.message}" })
+            File(dir, "traffic.json").writeText(
+                buildJsonArray { client.exchanges.forEach { addJsonObject { put("code", it.code); put("request", it.request); put("response", it.response) } } }.toString(),
+            )
         }
     }
 

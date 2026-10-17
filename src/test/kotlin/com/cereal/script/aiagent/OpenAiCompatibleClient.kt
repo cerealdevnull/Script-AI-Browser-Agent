@@ -38,12 +38,16 @@ import java.util.concurrent.TimeUnit
 /**
  * The test-only [LlmComponent] for the real-model runs (acceptance, smoke and field tests): Chat Completions on any
  * OpenAI-compatible server (OpenAI, Gemini's and Anthropic's OpenAI endpoints, OpenRouter, Ollama). It records every
- * exchange in [exchanges]. Unlike the desktop client it doesn't validate, retry or cache.
+ * exchange in [exchanges] (the raw request JSON that left the machine) and every answer in [responses]. Unlike the
+ * desktop client it doesn't validate, retry or cache: these runs judge the agent, not the client.
  */
 class OpenAiCompatibleClient(private val baseUrl: String, private val apiKey: String?, private val model: String) : LlmComponent {
     class Exchange(val request: String, val code: Int, val response: String)
 
     val exchanges = CopyOnWriteArrayList<Exchange>()
+
+    /** Every answered call (one agent step each), in order. */
+    val responses = CopyOnWriteArrayList<LlmResponse>()
 
     @OptIn(CerealPlatformApi::class)
     override suspend fun complete(request: LlmRequest): LlmResponse {
@@ -119,7 +123,7 @@ class OpenAiCompatibleClient(private val baseUrl: String, private val apiKey: St
             json.str("model") ?: model,
             // The assistant message goes back as received (Gemini thought signatures ride in it).
             message.toString(),
-        )
+        ).also { responses += it }
     }
 
     @OptIn(CerealPlatformApi::class)

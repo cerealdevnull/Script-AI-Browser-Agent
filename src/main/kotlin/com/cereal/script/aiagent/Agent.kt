@@ -160,9 +160,6 @@ class Agent(
     var healed = false
         private set
 
-    private fun providerError(e: LlmException) =
-        Outcome.Failed("The AI provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
-
     /** The start page didn't load: nothing to show the model, so the run ends before step 1. */
     private fun startFailed(e: PageLoadException) =
         Outcome.Failed("Couldn't open $startUrl (${e.reason}). Check the Start URL.", 0, unreachable = hostOf(startUrl) ?: startUrl, startPage = true)
@@ -210,8 +207,9 @@ class Agent(
                     return when (e) {
                         is LlmException.RateLimited, is LlmException.Unavailable ->
                             Outcome.Failed(e.message ?: "Couldn't reach $AI_PROVIDER.", steps, unreachable = AI_PROVIDER)
-                        is LlmException.InvalidRequest -> providerError(e)
-                        is LlmException.InvalidOutput -> providerError(e)
+                        // InvalidOutput is caught above; it is listed only so the when stays exhaustive.
+                        is LlmException.InvalidRequest, is LlmException.InvalidOutput ->
+                            Outcome.Failed("The AI provider returned an error: ${sentence(e.message ?: "no details")}", steps, "Start the task again.")
                         is LlmException.NotConfigured, is LlmException.Authentication -> Outcome.Failed(e.message ?: "The AI provider rejected the request.", steps)
                     }
                 }

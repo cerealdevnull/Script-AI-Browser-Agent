@@ -16,6 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** A replay miss: the model resumes from the current page, and the cache tail from the failed step is rewritten. */
@@ -197,7 +198,7 @@ class HealTest {
     }
 
     @Test
-    fun `a replay that stops matching after a redesign and ends not met, where the learned run met it, points at Forget learned steps`() {
+    fun `a replay that stops matching after a redesign and ends not met, where the learned run met it, clears the learned steps`() {
         val price: suspend (LlmRequest) -> List<LlmToolCall> = {
             val text = Regex("""\[t\d+] StaticText "(Price: [^"]+)"""").find(it.lastText)!!.groupValues[1]
             val readout = """{"label": "Price", "ref": "${it.textRef("StaticText", text)}", "value": "$text"}"""
@@ -213,10 +214,10 @@ class HealTest {
         task(model, config(RunMode.Once)) { execute -> assertIs<ExecutionResult.Success>(execute()) }
 
         assertEquals(
-            "Couldn't find the pliers.\nPick Forget learned steps in the task's menu, then start the task again.\n" +
-                "Cost: \$0.01 (the page changed, so it re-learned part of it)",
+            "Couldn't find the pliers.\n$RELEARN\nCost: \$0.01 (the page changed, so it re-learned part of it)",
             host.notifications.last().message,
         )
+        assertNull(runBlocking { host.create().preference().getString("replay:" + sha256(GOAL + "\n" + site.url("").removeSuffix("/") + "\n")) })
     }
 
     @Test

@@ -51,37 +51,20 @@ class ProfileTest {
     }
 
     @Test
-    fun `Forget learned steps and sign out makes the next start sign in from scratch`() {
+    fun `stuck on a sign-in page signs out, so the next start signs in from scratch`() {
         val task = Host()
         val signIn: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
         assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
 
-        val result = runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps and sign out", config("Sign in")) }
-        assertEquals("Forgot learned steps and sign-ins", result)
-        assertFalse("rofile" in result!!, "user text names the profile")
+        // The page's path says sign-in, and the model keeps clicking the same button.
+        site.pages["sign-in.html"] = SESSION_PAGE
+        val stuck = runBlocking { task.run(AgentScript(profiles).also { task.llm.responder = (ScriptedModel(*Array(7) { signIn }))::respond }, TestConfig(goal = "Sign in", startUrl = site.url("sign-in.html"))) }
+        assertIs<ExecutionResult.Error>(stuck)
+        assertEquals(SIGNED_OUT, task.notifications.last().message.lines()[1])
+        assertFalse("rofile" in SIGNED_OUT, "user text names the profile")
+        assertTrue(profiles.toFile().listFiles().isNullOrEmpty(), "the task's Chrome profiles are gone")
 
-        // No learned steps left (the model is asked) and no sign-in left (the page shows Signed out).
         assertIs<ExecutionResult.Success>(run(task, "Sign in", { assertTrue("Signed out" in it.lastText, it.lastText).let { finish() } }))
-    }
-
-    @Test
-    fun `Forget learned steps keeps the sign-in`() {
-        val task = Host()
-        val signIn: suspend (LlmRequest) -> List<LlmToolCall> = { listOf(call("click", """{"ref": ${it.ref("button", "Sign in")}}""")) }
-        assertIs<ExecutionResult.Success>(run(task, "Sign in", signIn, { finish() }))
-
-        assertEquals("Forgot learned steps", runBlocking { task.act(AgentScript(profilesDir = profiles), "Forget learned steps", config("Sign in")) })
-
-        assertIs<ExecutionResult.Success>(run(task, "Sign in", { assertTrue("Signed in" in it.lastText, it.lastText).let { finish() } }))
-    }
-
-    @Test
-    fun `both resets ask first, saying re-learning costs model calls, and signing out says to sign in again`() {
-        val actions = AgentScript(profilesDir = profiles).taskActions().associate { it.name to it.confirm!! }
-        assertEquals(listOf("Forget learned steps", "Forget learned steps and sign out"), actions.keys.toList())
-        assertTrue(actions.values.all { "model calls" in it }, actions.toString())
-        assertFalse("sign in" in actions.getValue("Forget learned steps"))
-        assertTrue("sign in to the site again" in actions.getValue("Forget learned steps and sign out"))
     }
 }
 

@@ -33,8 +33,7 @@
 - **sign-in submit**: submitting a sign-in form after `type_secret`; it clears a model-only irreversible flag.
 - **scrub**: replacing revealed secret values with `{{secret:name}}` before text reaches the model or the logs.
 - **browser profile**: the task's own Chrome data (cookies, sign-ins); tied to the task and its secret values, so another account gets a clean one.
-- **task action**: something the user runs from an existing task's menu while the task is stopped, outside its configuration form (which only creates tasks).
-- **reset**: a task action that forgets learned steps (the replay cache), or learned steps and sign-ins (the browser profile).
+- **reset**: the script forgetting learned steps (the replay cache) when a heal or replay shows they no longer fit, or learned steps and sign-ins (the browser profile) when the agent gets stuck on a sign-in page.
 - **allowed domain**: the start URL's eTLD+1 plus the user's list; `navigate` stays within them.
 - **run cap** / **task cap**: the step and dollar limits per goal run / per task.
 - **task total**: the dollars all goal runs of a task have cost since the task last started; counted against the task cap.

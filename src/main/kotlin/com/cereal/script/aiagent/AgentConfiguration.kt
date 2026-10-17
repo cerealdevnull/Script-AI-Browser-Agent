@@ -120,7 +120,7 @@ interface AgentConfiguration : ScriptConfiguration {
     )
     fun allowedDomains(): List<AllowedDomain>?
 
-    // Retired keyNames, never reuse: "reLearn", "onNextStart" (resets are task actions now).
+    // Retired keyNames, never reuse: "reLearn", "onNextStart" (the script resets itself now).
 
     // Nested so the shrunk jar's metadata restore (AgentConfiguration*.class) covers it: the host reflects on it.
     interface AllowedDomain : ScriptConfigurationListItem {

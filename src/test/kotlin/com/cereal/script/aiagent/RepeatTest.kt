@@ -553,7 +553,7 @@ class RepeatTest {
     }
 
     @Test
-    fun `a heal that finds nothing to watch is a failed heal that points at Forget learned steps`() {
+    fun `a heal that finds nothing to watch is a failed heal that clears the learned steps`() {
         stock("Out of stock")
         val model = ScriptedModel({ listOf(call("click", """{"ref": ${it.ref("link", "Long Nose Pliers")}}""")) }, { listOf(call("finish", notMet(it))) }, noCheck, noCheck, noCheck)
 
@@ -567,9 +567,10 @@ class RepeatTest {
 
         assertEquals(5, model.requests.size)
         assertEquals(
-            "Couldn't find something on the page to watch.\nPick Forget learned steps in the task's menu, then start the task again.\nCost: \$0.02",
+            "Couldn't find something on the page to watch.\n$RELEARN\nCost: \$0.02",
             host.notifications.last().message,
         )
+        assertNull(cache())
     }
 
     @Test
@@ -584,20 +585,11 @@ class RepeatTest {
     }
 
     @Test
-    fun `Forget learned steps makes the next start re-learn, and an edited goal has its own entry`() {
+    fun `an edited goal has its own cache entry`() {
         stock("Out of stock")
         task(learning()) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertNotNull(cache())
-
-        val edited = "$GOAL, please"
-        assertNull(cache(edited))
-        assertEquals("Forgot learned steps", runBlocking { host.act(AgentScript(profilesDir = profiles), "Forget learned steps", config()) })
-        assertNull(cache())
-
-        val relearning = learning()
-        task(relearning) { execute -> repeat(2) { assertIs<ExecutionResult.Loop>(execute()) } }
-        assertEquals(2, relearning.requests.size, "the second check replayed")
-        assertNotNull(cache())
+        assertNull(cache("$GOAL, please"))
     }
 
     @Test
@@ -674,7 +666,7 @@ class RepeatTest {
         )
 
         site.pages.remove("index.html")
-        runBlocking { host.act(AgentScript(profilesDir = profiles), "Forget learned steps", config()) }
+        runBlocking { host.create().preference().delete("replay:" + sha256(GOAL + "\n" + site.url("").removeSuffix("/") + "\n")) }
         val restarted = learning()
         task(restarted, config(maxTaskCost = 0.02)) { execute -> assertIs<ExecutionResult.Loop>(execute()) }
         assertEquals(2, restarted.requests.size, "a restart resets the task total")

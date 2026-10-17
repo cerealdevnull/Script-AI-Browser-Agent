@@ -66,9 +66,9 @@ sealed interface Outcome {
     /**
      * [reason]: the headline; [action]: what the user can do about it, if anything. [unreachable]: the site or provider
      * a page load, network or model 429/5xx failure couldn't reach after its retries ([transient]: a later attempt may
-     * work; [startPage]: it was the start URL, so no step ran). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
+     * work; [startPage]: it was the start URL, so no step ran; [signOut]: stuck signing in, so the script signs out). Everything else (rejected key/model, refusal, stuck, the model's own `fail`) won't get better by retrying.
      */
-    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null, val startPage: Boolean = false) : Outcome {
+    class Failed(val reason: String, override val steps: Int, val action: String? = null, val unreachable: String? = null, val startPage: Boolean = false, val signOut: Boolean = false) : Outcome {
         val transient get() = unreachable != null
     }
 
@@ -286,12 +286,13 @@ class Agent(
                 val seen = repeats.merge(actionKey(call), 1, Int::plus)!!
                 if (seen >= 2 * STUCK_REPEATS) {
                     val page = runCatching { browser.url() }.getOrNull() ?: lastUrl ?: startUrl
-                    // Stuck signing in: a stale or wrong-account sign-in is likely, so point at the reset that signs out.
+                    // Stuck signing in: a stale or wrong-account sign-in is likely, so the script signs out (see signOut).
                     val signIn = SIGN_IN_PAGE.containsMatchIn("${runCatching { URI(page).path }.getOrNull().orEmpty()} ${runCatching { browser.title() }.getOrNull().orEmpty()}".lowercase())
                     return Outcome.Failed(
                         "The agent got stuck repeating the same action on $page.",
                         steps,
-                        if (signIn) FORGET_AND_SIGN_OUT else "Make the goal more specific, then start the task again.",
+                        if (signIn) SIGNED_OUT else "Make the goal more specific, then start the task again.",
+                        signOut = signIn,
                     )
                 }
                 val target =

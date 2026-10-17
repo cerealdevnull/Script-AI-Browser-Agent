@@ -2,7 +2,6 @@ package com.cereal.script.aiagent
 
 import com.cereal.sdk.ExecutionResult
 import com.cereal.sdk.Script
-import com.cereal.sdk.TaskAction
 import com.cereal.sdk.component.ComponentProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -230,9 +229,10 @@ internal class AgentScript(
                 if (repeat) ", check $checks" else "",
         )
         // A Repeat run that learned or healed no Check can't be re-checked for free: stop rather than pay on every check.
-        // A heal is a failed heal: the learned steps no longer fit; a learned run asks for a reworded goal.
+        // A heal is a failed heal: the learned steps no longer fit, so forget them; a learned run asks for a reworded goal.
         if (repeat && outcome is Outcome.Finished && !outcome.goalMet && outcome.check == null && (!replayed || agent.healed) && !unverifiedMet) {
-            return report.error(NOTHING_TO_WATCH, if (agent.healed) FORGET_STEPS else REWORD, cost = cost())
+            if (agent.healed) provider.preference().delete(key)
+            return report.error(NOTHING_TO_WATCH, if (agent.healed) RELEARN else REWORD, cost = cost())
         }
         // A monitor survives a bad minute: retry at the next interval, end the task after MAX_TRANSIENT_FAILURES in a row.
         // A start page that won't load on the first run is most likely a mistyped Start URL: report it at once.
@@ -251,7 +251,10 @@ internal class AgentScript(
                     "Start the task again when it's back.",
                     cost(),
                 )
-            is Outcome.Failed -> report.error(verdict, outcome.action, cost())
+            is Outcome.Failed -> {
+                if (outcome.signOut) signOut(configuration, provider)
+                report.error(verdict, outcome.action, cost())
+            }
             is Outcome.Stopped -> report.error(verdict, outcome.action, cost())
             // A No is a normal finish, not an Error; it ends a monitor too.
             is Outcome.Declined -> report.notify(Kind.NotMet, verdict, cost = cost()).let { ExecutionResult.Success(verdict) }
@@ -283,11 +286,13 @@ internal class AgentScript(
             is Outcome.Finished -> {
                 val readouts = outcome.readouts.map { scrubber.forLog(it.label) to scrubber.forLog(it.text) }
                 val met = (outcome.check ?: cache?.check)?.takeIf { repeat }?.let { scrubber.forLog("Now holds: ${it.words()}") }
+                // The learned steps likely no longer fit: forget them, so the next start learns them again.
                 val stale = replayed && !outcome.goalMet && learnedMet
+                if (stale) provider.preference().delete(key)
                 report.notify(
                     if (outcome.goalMet) Kind.Met else Kind.NotMet,
                     met ?: verdict,
-                    FORGET_STEPS.takeIf { stale },
+                    RELEARN.takeIf { stale },
                     answer.getOrNull(1),
                     readouts,
                     cost = if (repeat) total() else cost(),
@@ -412,32 +417,17 @@ internal class AgentScript(
         return "Fix these in the task settings: " + errors.joinToString(" ") { it.removeSuffix(".") + "." }
     }
 
-    // Resets, from the task's menu while it's stopped (the host never runs them during a run).
-    override fun taskActions(): List<TaskAction<AgentConfiguration>> =
-        listOf(
-            reset("Forget learned steps", "Forgot learned steps", "The next start learns the steps again, which costs model calls.") { config, provider ->
-                provider.preference().delete(cacheKey(config))
-            },
-            reset(
-                "Forget learned steps and sign out",
-                "Forgot learned steps and sign-ins",
-                "The next start learns the steps again, which costs model calls, and you must sign in to the site again.",
-            ) { config, provider ->
-                val prefs = provider.preference()
-                prefs.delete(cacheKey(config))
-                val taskId = prefs.getString(TASK_ID_KEY)
-                // Every Chrome profile of this task (one per set of secrets).
-                if (taskId != null) profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
-            },
-        )
-
-    private fun reset(name: String, done: String, confirm: String, block: suspend (AgentConfiguration, ComponentProvider) -> Unit) =
-        object : TaskAction<AgentConfiguration> {
-            override val name = name
-            override val confirm = confirm
-
-            override suspend fun run(configuration: AgentConfiguration, provider: ComponentProvider): String = done.also { block(configuration, provider) }
+    /** Forgets the learned steps and deletes every Chrome profile of this task (one per set of secrets), closing Chrome first. */
+    private suspend fun signOut(config: AgentConfiguration, provider: ComponentProvider) {
+        val prefs = provider.preference()
+        prefs.delete(cacheKey(config))
+        browser?.let { open ->
+            browser = null
+            withContext(NonCancellable) { open.close() }
         }
+        val taskId = prefs.getString(TASK_ID_KEY) ?: return
+        profilesDir.toFile().listFiles { f -> f.name.startsWith("$taskId-") }?.forEach { it.deleteRecursively() }
+    }
 
     private fun cacheKey(config: AgentConfiguration) = ReplayCache.key(config.goal(), config.startUrl(), config.secretsByName().keys)
 
@@ -456,8 +446,8 @@ internal class AgentScript(
 private const val MAX_TRANSIENT_FAILURES = 3
 private const val NOTHING_TO_WATCH = "Couldn't find something on the page to watch."
 private const val REWORD = "Reword the goal as a condition, e.g. notify me when … is in stock, then start the task again."
-internal const val FORGET_STEPS = "Pick Forget learned steps in the task's menu, then start the task again."
-internal const val FORGET_AND_SIGN_OUT = "Pick Forget learned steps and sign out in the task's menu, then start the task again."
+internal const val RELEARN = "Cleared the learned steps; the next start learns them again, which costs model calls."
+internal const val SIGNED_OUT = "Signed out and cleared the learned steps; sign in to the site again on the next start, which also learns the steps again and costs model calls."
 private const val TASK_ID_KEY = "taskId"
 private const val CONFIRM_URL = "https://cereal-confirm.invalid/confirm"
 private const val DECLINE_URL = "https://cereal-confirm.invalid/decline"
